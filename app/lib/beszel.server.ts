@@ -1,5 +1,8 @@
 import type { AxiosInstance } from "axios";
+import { loadEnvFile } from "~/lib/env.server";
 import { createHttpClient, HttpError, setAuthToken } from "~/lib/http.server";
+
+loadEnvFile();
 
 export interface PublicSystemInfo {
   cpu?: number;
@@ -485,14 +488,37 @@ export type DashboardData = {
   fetchedAt: string;
 };
 
+function formatDashboardError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (message.includes("Need BESZEL_URL")) {
+    return "Server misconfigured: set BESZEL_URL";
+  }
+  if (message.includes("Need BESZEL_TOKEN") || message.includes("BESZEL_EMAIL")) {
+    return "Server misconfigured: set Beszel credentials";
+  }
+  if (message.includes("Beszel authentication failed")) {
+    return "Beszel authentication failed";
+  }
+  if (message.includes("Failed to fetch system list")) {
+    return "Failed to fetch systems from Beszel";
+  }
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|fetch failed/i.test(message)) {
+    return "Cannot reach Beszel hub — check BESZEL_URL from the server";
+  }
+
+  return "Failed to load dashboard data";
+}
+
 export async function loadDashboardData(): Promise<DashboardData> {
   try {
     const systems = await fetchDashboardData();
     return { systems, error: null, fetchedAt: new Date().toISOString() };
-  } catch {
+  } catch (error) {
+    console.error("[beszel-pub] loadDashboardData failed:", error);
     return {
       systems: [],
-      error: "Failed to load dashboard data",
+      error: formatDashboardError(error),
       fetchedAt: new Date().toISOString(),
     };
   }
