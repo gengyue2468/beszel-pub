@@ -9,12 +9,16 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
+    "@base-ui/react": "^1.5.0",
     "@react-router/node": "7.16.0",
     "@react-router/serve": "7.16.0",
+    "axios": "^1.17.0",
+    "dayjs": "^1.11.21",
     "isbot": "^5.1.36",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-router": "7.16.0"
+    "react-router": "7.16.0",
+    "recharts": "^3.8.1"
   },
   "devDependencies": {
     "@react-router/dev": "7.16.0",

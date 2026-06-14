@@ -1,87 +1,60 @@
-# Welcome to React Router!
+# beszel-pub
 
-A modern, production-ready template for building full-stack React applications using React Router.
+A lightweight public status page for [Beszel](https://github.com/henrygd/beszel).
 
-[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/remix-run/react-router-templates/tree/main/default)
+Beszel ships a full authenticated dashboard, but not a read-only page you can expose on the internet. This app fills that gap: it pulls metrics from your Beszel hub and renders a simple, shareable server status board.
+
+Live example: [st.gy.run](https://st.gy.run)
 
 ## Features
 
-- 🚀 Server-side rendering
-- ⚡️ Hot Module Replacement (HMR)
-- 📦 Asset bundling and optimization
-- 🔄 Data loading and mutations
-- 🔒 TypeScript by default
-- 🎉 TailwindCSS for styling
-- 📖 [React Router docs](https://reactrouter.com/)
+- CPU, RAM, disk I/O, and network charts with live rates
+- Disk usage, uptime, cumulative upload/download
+- Sort by name, CPU, RAM, disk, uptime, or status
+- Auto-refresh every 5 seconds
+- Light/dark mode via system preference
+- Sensitive fields (host, port) are never shown
 
-## Getting Started
+## Configuration
 
-### Installation
+Site branding and UI copy live in `app/config.ts`. Beszel credentials stay in environment variables.
 
-Install the dependencies:
+```env
+BESZEL_URL=https://your-beszel-hub.example
+BESZEL_EMAIL=your-email
+BESZEL_PASSWORD=your-password
+
+# or use a token instead of email/password
+# BESZEL_TOKEN=
+```
+
+Copy `.env.example` to `.env` and fill in your values.
+
+## Development
 
 ```bash
 npm install
-```
-
-### Development
-
-Start the development server with HMR:
-
-```bash
 npm run dev
 ```
 
-Your application will be available at `http://localhost:5173`.
+In development, Vite proxies `/beszel` to `BESZEL_URL`. Server-side loaders call that proxy path instead of hitting the hub directly, which also works when the hub is only reachable over a private network (e.g. Tailscale).
 
-## Building for Production
-
-Create a production build:
+## Production
 
 ```bash
 npm run build
+npm run start
 ```
 
-## Deployment
-
-### Docker Deployment
-
-To build and run using Docker:
+Or use the included Dockerfile:
 
 ```bash
-docker build -t my-app .
-
-# Run the container
-docker run -p 3000:3000 my-app
+docker build -t beszel-pub .
+docker run --env-file .env -p 3000:3000 beszel-pub
 ```
 
-The containerized application can be deployed to any platform that supports Docker, including:
+In production, the `/beszel/*` route forwards requests to `BESZEL_URL` the same way the Vite proxy does in dev.
 
-- AWS ECS
-- Google Cloud Run
-- Azure Container Apps
-- Digital Ocean App Platform
-- Fly.io
-- Railway
+## Stack
 
-### DIY Deployment
-
-If you're familiar with deploying Node applications, the built-in app server is production-ready.
-
-Make sure to deploy the output of `npm run build`
-
-```
-├── package.json
-├── package-lock.json (or pnpm-lock.yaml, or bun.lockb)
-├── build/
-│   ├── client/    # Static assets
-│   └── server/    # Server-side code
-```
-
-## Styling
-
-This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.
-
----
-
-Built with ❤️ using React Router.
+React Router 7 (SSR), Tailwind CSS v4, Recharts, Beszel PocketBase API.
