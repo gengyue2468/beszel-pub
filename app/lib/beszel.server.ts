@@ -522,15 +522,27 @@ function mergeLoadInfo(
   stats?: SystemStatsPayload,
 ): BeszelSystemInfo | undefined {
   if (!info && !stats) return undefined;
-  if (info?.la || info?.l1 != null) return info;
   if (!stats) return info;
-  return {
-    ...info,
-    la: stats.la,
-    l1: stats.l1,
-    l5: stats.l5,
-    l15: stats.l15,
-  };
+  return mergeStatsIntoInfo(info, stats);
+}
+
+function mergeStatsIntoInfo(
+  info?: BeszelSystemInfo,
+  stats?: SystemStatsPayload,
+): BeszelSystemInfo | undefined {
+  if (!info && !stats) return undefined;
+
+  const merged: BeszelSystemInfo = { ...(info ?? {}) };
+  if (!stats) return Object.keys(merged).length > 0 ? merged : undefined;
+
+  if (stats.cpu != null) merged.cpu = stats.cpu;
+  if (stats.mp != null) merged.mp = stats.mp;
+  if (stats.la) merged.la = stats.la;
+  if (stats.l1 != null) merged.l1 = stats.l1;
+  if (stats.l5 != null) merged.l5 = stats.l5;
+  if (stats.l15 != null) merged.l15 = stats.l15;
+
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function parseNetworkTotals(stats?: SystemStatsPayload): NetworkTotals | undefined {
@@ -646,7 +658,7 @@ export function applyRtMetrics(
   const mergedInfo = data.info
     ? ({ ...(existing.info as BeszelSystemInfo | undefined), ...data.info } as BeszelSystemInfo)
     : (existing.info as BeszelSystemInfo | undefined);
-  const info = mergeLoadInfo(mergedInfo, data.stats);
+  const info = mergeStatsIntoInfo(mergedInfo, data.stats);
 
   return {
     ...existing,

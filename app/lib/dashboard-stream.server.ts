@@ -11,7 +11,7 @@ type StreamClient = {
   close: () => void;
 };
 
-const BROADCAST_MS = 500;
+const BROADCAST_MS = 150;
 
 const clients = new Set<StreamClient>();
 let lastData: DashboardData | null = null;
@@ -20,6 +20,7 @@ let broadcastTimer: ReturnType<typeof setTimeout> | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let unsubscribeBeszel: (() => void) | null = null;
 let refreshPromise: Promise<void> | null = null;
+let hubStarting: Promise<void> | null = null;
 
 function encodeEvent(data: DashboardData) {
   return `data: ${JSON.stringify(data)}\n\n`;
@@ -87,7 +88,7 @@ function handleBeszelEvent(event: Parameters<typeof applyDashboardEvent>[0]) {
 
   const updated = applyDashboardEvent(event);
   if (updated) {
-    broadcast(updated);
+    broadcast(updated, event.kind === "rt_metrics");
     return;
   }
 
@@ -97,13 +98,18 @@ function handleBeszelEvent(event: Parameters<typeof applyDashboardEvent>[0]) {
 }
 
 function startHub() {
-  if (unsubscribeBeszel) return;
+  if (unsubscribeBeszel || hubStarting) return;
 
-  unsubscribeBeszel = subscribeBeszelChanges(handleBeszelEvent);
-  void ensureDashboardCache().then((data) => {
-    setBeszelSystemIds(data.systems.map((system) => system.id));
-    broadcast(data, true);
-  });
+  hubStarting = (async () => {
+    try {
+      const data = await ensureDashboardCache();
+      setBeszelSystemIds(data.systems.map((system) => system.id));
+      broadcast(data, true);
+      unsubscribeBeszel = subscribeBeszelChanges(handleBeszelEvent);
+    } finally {
+      hubStarting = null;
+    }
+  })();
 
   pingTimer = setInterval(() => {
     for (const client of clients) {
