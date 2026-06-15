@@ -1,1 +1,1 @@
-export { Sparkline } from "./sparkline";
+export { Sparkline, type SparklineSeries } from "./sparkline";

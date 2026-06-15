@@ -1,23 +1,24 @@
 import type { PublicSystem } from "~/lib/beszel.server";
+import type { SparklineSeries } from "~/components/sparkline";
 import {
-  diskIoChartData,
   formatBytes,
   formatCpuCaption,
   formatCpuTooltip,
   formatCpuTotal,
   formatCpuUsed,
+  formatDiskIoRead,
   formatDiskIoUsed,
   formatDiskIoWrite,
   formatDiskValue,
   formatIoTooltip,
   formatNetRecv,
   formatNetSent,
+  formatNetUsed,
+  formatPct,
   formatRamPct,
-  formatRamTooltip,
   formatRamTotal,
   formatRamUsedGb,
   formatUptime,
-  netChartData,
 } from "./format";
 
 export type ListFooterItem =
@@ -29,12 +30,65 @@ export type ChartMetricConfig = {
   label: string;
   used: string;
   total: string;
-  data: number[];
-  colorClass: string;
+  data?: number[];
+  series?: SparklineSeries[];
+  colorClass?: string;
+  fill?: string;
   caption?: string | null;
   tooltipFormatter?: (value: number) => string;
   listFooter?: ListFooterItem[];
 };
+
+const RAM_SERIES = (system: PublicSystem): SparklineSeries[] => [
+  {
+    key: "mem",
+    data: system.history.mem,
+    color: "var(--chart-blue)",
+    fill: "var(--chart-blue-fill)",
+    label: "mem",
+  },
+  {
+    key: "swap",
+    data: system.history.swap,
+    color: "var(--chart-violet)",
+    fill: "var(--chart-violet-fill)",
+    label: "swap",
+  },
+];
+
+const DISK_IO_SERIES = (system: PublicSystem): SparklineSeries[] => [
+  {
+    key: "read",
+    data: system.history.diskRead,
+    color: "var(--chart-cyan)",
+    fill: "var(--chart-cyan-fill)",
+    label: "read",
+  },
+  {
+    key: "write",
+    data: system.history.diskWrite,
+    color: "var(--chart-amber)",
+    fill: "var(--chart-amber-fill)",
+    label: "write",
+  },
+];
+
+const NET_SERIES = (system: PublicSystem): SparklineSeries[] => [
+  {
+    key: "sent",
+    data: system.history.netSent,
+    color: "var(--chart-amber)",
+    fill: "var(--chart-amber-fill)",
+    label: "↑",
+  },
+  {
+    key: "recv",
+    data: system.history.netRecv,
+    color: "var(--chart-green)",
+    fill: "var(--chart-green-fill)",
+    label: "↓",
+  },
+];
 
 export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[] {
   const info = system.info;
@@ -49,7 +103,8 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       used: formatCpuUsed(system),
       total: formatCpuTotal(system),
       data: system.history.cpu,
-      colorClass: "text-success",
+      colorClass: "text-chart-blue",
+      fill: "var(--chart-blue-fill)",
       caption: formatCpuCaption(system),
       tooltipFormatter: formatCpuTooltip,
       listFooter: [
@@ -70,10 +125,9 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       label: "RAM",
       used: formatRamPct(system),
       total: formatRamTotal(system),
+      series: RAM_SERIES(system),
       caption: formatRamUsedGb(system),
-      data: system.history.mem,
-      colorClass: "text-foreground",
-      tooltipFormatter: (v) => formatRamTooltip(v, system),
+      tooltipFormatter: formatPct,
       listFooter: [{ type: "line", text: `${ramUsed}/${ramTotal}` }],
     },
     {
@@ -81,9 +135,8 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       label: "DISK I/O",
       used: formatDiskIoUsed(system),
       total: formatDiskIoWrite(system),
-      data: diskIoChartData(system),
-      colorClass: "text-warning",
-      caption: "read",
+      series: DISK_IO_SERIES(system),
+      caption: formatDiskIoRead(system),
       tooltipFormatter: formatIoTooltip,
       listFooter: [`DISK ${formatDiskValue(system)}`].map((text) => ({
         type: "line" as const,
@@ -93,10 +146,10 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
     {
       key: "net",
       label: "NET",
-      used: formatNetSent(system),
+      used: formatNetUsed(system),
       total: formatNetRecv(system),
-      data: netChartData(system),
-      colorClass: "text-foreground-muted",
+      series: NET_SERIES(system),
+      caption: formatNetSent(system),
       tooltipFormatter: formatIoTooltip,
       listFooter: [
         {

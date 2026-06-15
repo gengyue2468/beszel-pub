@@ -13,6 +13,16 @@
   --success: #2d7a46;
   --error: #c0392b;
   --warning: #a67c00;
+  --chart-blue: #2f6feb;
+  --chart-violet: #6b5b95;
+  --chart-cyan: #2a8f8f;
+  --chart-amber: #b8860b;
+  --chart-green: #2d7a46;
+  --chart-blue-fill: color-mix(in srgb, var(--chart-blue) 22%, transparent);
+  --chart-violet-fill: color-mix(in srgb, var(--chart-violet) 22%, transparent);
+  --chart-cyan-fill: color-mix(in srgb, var(--chart-cyan) 22%, transparent);
+  --chart-amber-fill: color-mix(in srgb, var(--chart-amber) 22%, transparent);
+  --chart-green-fill: color-mix(in srgb, var(--chart-green) 22%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -29,6 +39,16 @@
     --success: #5cb870;
     --error: #e8706a;
     --warning: #d4a72c;
+    --chart-blue: #6ea8fe;
+    --chart-violet: #a78bfa;
+    --chart-cyan: #5ec4c4;
+    --chart-amber: #e0b050;
+    --chart-green: #5cb870;
+    --chart-blue-fill: color-mix(in srgb, var(--chart-blue) 28%, transparent);
+    --chart-violet-fill: color-mix(in srgb, var(--chart-violet) 28%, transparent);
+    --chart-cyan-fill: color-mix(in srgb, var(--chart-cyan) 28%, transparent);
+    --chart-amber-fill: color-mix(in srgb, var(--chart-amber) 28%, transparent);
+    --chart-green-fill: color-mix(in srgb, var(--chart-green) 28%, transparent);
   }
 }
 
@@ -45,6 +65,11 @@
   --color-success: var(--success);
   --color-error: var(--error);
   --color-warning: var(--warning);
+  --color-chart-blue: var(--chart-blue);
+  --color-chart-violet: var(--chart-violet);
+  --color-chart-cyan: var(--chart-cyan);
+  --color-chart-amber: var(--chart-amber);
+  --color-chart-green: var(--chart-green);
 }
 
 html,

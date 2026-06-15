@@ -135,6 +135,7 @@ export interface IoRates {
 export interface SystemHistory {
   cpu: number[];
   mem: number[];
+  swap: number[];
   diskRead: number[];
   diskWrite: number[];
   netSent: number[];
@@ -190,11 +191,17 @@ const OS_NAMES = ["Linux", "macOS", "Windows", "FreeBSD"];
 export const EMPTY_HISTORY: SystemHistory = {
   cpu: [],
   mem: [],
+  swap: [],
   diskRead: [],
   diskWrite: [],
   netSent: [],
   netRecv: [],
 };
+
+function swapPct(stats?: SystemStatsPayload) {
+  if (!stats?.s) return 0;
+  return ((stats.su ?? 0) / stats.s) * 100;
+}
 
 export function getBeszelUrl() {
   const url = process.env.BESZEL_URL?.replace(/\/$/, "");
@@ -227,22 +234,22 @@ function bytesPerSecToMb(bytesPerSec: number) {
 
 function diskReadMb(stats?: SystemStatsPayload) {
   if (!stats) return 0;
+  if (stats.dio != null) return bytesPerSecToMb(stats.dio[0] ?? 0);
   if (stats.dr != null) return stats.dr;
-  if (stats.dio?.[0] != null) return bytesPerSecToMb(stats.dio[0]);
   return 0;
 }
 
 function diskWriteMb(stats?: SystemStatsPayload) {
   if (!stats) return 0;
+  if (stats.dio != null) return bytesPerSecToMb(stats.dio[1] ?? 0);
   if (stats.dw != null) return stats.dw;
-  if (stats.dio?.[1] != null) return bytesPerSecToMb(stats.dio[1]);
   return 0;
 }
 
 function netSentMb(stats?: SystemStatsPayload) {
   if (!stats) return 0;
-  if (stats.ns != null) return stats.ns;
   if (stats.b?.[0] != null) return bytesPerSecToMb(stats.b[0]);
+  if (stats.ns != null) return stats.ns;
   if (stats.ni) {
     return bytesPerSecToMb(
       Object.values(stats.ni).reduce((sum, iface) => sum + (iface[0] ?? 0), 0),
@@ -253,8 +260,8 @@ function netSentMb(stats?: SystemStatsPayload) {
 
 function netRecvMb(stats?: SystemStatsPayload) {
   if (!stats) return 0;
-  if (stats.nr != null) return stats.nr;
   if (stats.b?.[1] != null) return bytesPerSecToMb(stats.b[1]);
+  if (stats.nr != null) return stats.nr;
   if (stats.ni) {
     return bytesPerSecToMb(
       Object.values(stats.ni).reduce((sum, iface) => sum + (iface[1] ?? 0), 0),
@@ -263,26 +270,82 @@ function netRecvMb(stats?: SystemStatsPayload) {
   return 0;
 }
 
-function hasIoStats(stats?: SystemStatsPayload) {
-  if (!stats) return false;
-  return (
-    stats.dr != null ||
-    stats.dw != null ||
-    stats.ns != null ||
-    stats.nr != null ||
-    stats.b != null ||
-    stats.dio != null ||
-    stats.ni != null
-  );
+function hasDiskIoFields(stats: SystemStatsPayload) {
+  return stats.dio != null || stats.dr != null || stats.dw != null;
 }
 
-function mergeRates(stats?: IoRates, info?: BeszelSystemInfo): IoRates | undefined {
-  const merged: IoRates = { ...stats };
-  if (info?.bb) {
-    if (merged.netSent == null) merged.netSent = bytesPerSecToMb(info.bb[0]);
-    if (merged.netRecv == null) merged.netRecv = bytesPerSecToMb(info.bb[1]);
+function parseDiskRates(
+  stats?: SystemStatsPayload,
+): Pick<IoRates, "diskRead" | "diskWrite"> | undefined {
+  if (!stats || !hasDiskIoFields(stats)) return undefined;
+
+  if (stats.dio != null) {
+    return {
+      diskRead: bytesPerSecToMb(stats.dio[0] ?? 0),
+      diskWrite: bytesPerSecToMb(stats.dio[1] ?? 0),
+    };
   }
-  return Object.keys(merged).length > 0 ? merged : undefined;
+
+  const out: Pick<IoRates, "diskRead" | "diskWrite"> = {};
+  if (stats.dr != null) out.diskRead = stats.dr;
+  if (stats.dw != null) out.diskWrite = stats.dw;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function parseNetRates(
+  stats?: SystemStatsPayload,
+): Pick<IoRates, "netSent" | "netRecv"> | undefined {
+  if (!stats) return undefined;
+
+  const out: Pick<IoRates, "netSent" | "netRecv"> = {};
+
+  if (stats.b != null) {
+    out.netSent = bytesPerSecToMb(stats.b[0]);
+    out.netRecv = bytesPerSecToMb(stats.b[1]);
+  } else if (stats.ni) {
+    out.netSent = netSentMb(stats);
+    out.netRecv = netRecvMb(stats);
+  } else {
+    if (stats.ns != null) out.netSent = stats.ns;
+    if (stats.nr != null) out.netRecv = stats.nr;
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function parseIoRates(stats?: SystemStatsPayload): IoRates | undefined {
+  const rates = { ...parseDiskRates(stats), ...parseNetRates(stats) };
+  return Object.keys(rates).length > 0 ? rates : undefined;
+}
+
+function mergeIoRates(
+  existing?: IoRates,
+  incoming?: IoRates,
+  info?: BeszelSystemInfo,
+): IoRates | undefined {
+  const out: IoRates = { ...existing };
+
+  if (incoming) {
+    if ("diskRead" in incoming && incoming.diskRead != null) {
+      out.diskRead = incoming.diskRead;
+    }
+    if ("diskWrite" in incoming && incoming.diskWrite != null) {
+      out.diskWrite = incoming.diskWrite;
+    }
+    if ("netSent" in incoming && incoming.netSent != null) {
+      out.netSent = incoming.netSent;
+    }
+    if ("netRecv" in incoming && incoming.netRecv != null) {
+      out.netRecv = incoming.netRecv;
+    }
+  }
+
+  if (info?.bb) {
+    if (out.netSent == null) out.netSent = bytesPerSecToMb(info.bb[0]);
+    if (out.netRecv == null) out.netRecv = bytesPerSecToMb(info.bb[1]);
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function wrapError(message: string, error: unknown): never {
@@ -424,6 +487,7 @@ async function fetchSystemHistory(
       history: {
         cpu: items.map((r) => r.stats?.cpu ?? 0),
         mem: items.map((r) => r.stats?.mp ?? 0),
+        swap: items.map((r) => swapPct(r.stats)),
         diskRead: items.map((r) => diskReadMb(r.stats)),
         diskWrite: items.map((r) => diskWriteMb(r.stats)),
         netSent: items.map((r) => netSentMb(r.stats)),
@@ -436,19 +500,9 @@ async function fetchSystemHistory(
     };
   } catch {
     return {
-      history: { cpu: [], mem: [], diskRead: [], diskWrite: [], netSent: [], netRecv: [] },
+      history: { cpu: [], mem: [], swap: [], diskRead: [], diskWrite: [], netSent: [], netRecv: [] },
     };
   }
-}
-
-function parseIoRates(stats?: SystemStatsPayload): IoRates | undefined {
-  if (!hasIoStats(stats)) return undefined;
-  return {
-    diskRead: diskReadMb(stats),
-    diskWrite: diskWriteMb(stats),
-    netSent: netSentMb(stats),
-    netRecv: netRecvMb(stats),
-  };
 }
 
 function parseLiveStats(stats?: SystemStatsPayload): SystemLiveStats | undefined {
@@ -521,7 +575,7 @@ export async function fetchDashboardData(): Promise<PublicSystem[]> {
           specFromDetails(record.info, details),
           live,
           network,
-          mergeRates(rates, info),
+          mergeIoRates(undefined, rates, info),
         );
       }),
     );
@@ -576,7 +630,7 @@ function toPublicSystem(
 function ratesFromInfo(info?: BeszelSystemInfo): IoRates | undefined {
   if (!info) return undefined;
   const payload = info as BeszelSystemInfo & { dio?: [number, number]; b?: [number, number] };
-  return mergeRates(parseIoRates({ b: payload.b, dio: payload.dio }), info);
+  return mergeIoRates(undefined, parseIoRates({ b: payload.b, dio: payload.dio }), info);
 }
 
 function pushHistory(values: number[], value: number) {
@@ -598,9 +652,11 @@ export function applyRtMetrics(
     ...existing,
     info: sanitizePublicInfo(info) ?? existing.info,
     rates:
-      (data.stats ? mergeRates(parseIoRates(data.stats), info) : undefined) ??
-      ratesFromInfo(info) ??
-      existing.rates,
+      mergeIoRates(
+        existing.rates,
+        data.stats ? parseIoRates(data.stats) : undefined,
+        info,
+      ) ?? existing.rates,
     live: (data.stats ? parseLiveStats(data.stats) : undefined) ?? existing.live,
   };
 }
@@ -640,13 +696,14 @@ export function applySystemStat(
     history: {
       cpu: pushHistory(existing.history.cpu, stats.cpu ?? 0),
       mem: pushHistory(existing.history.mem, stats.mp ?? 0),
+      swap: pushHistory(existing.history.swap, swapPct(stats)),
       diskRead: pushHistory(existing.history.diskRead, diskReadMb(stats)),
       diskWrite: pushHistory(existing.history.diskWrite, diskWriteMb(stats)),
       netSent: pushHistory(existing.history.netSent, netSentMb(stats)),
       netRecv: pushHistory(existing.history.netRecv, netRecvMb(stats)),
     },
     network: parseNetworkTotals(stats) ?? existing.network,
-    rates: mergeRates(parseIoRates(stats), mergedInfo) ?? existing.rates,
+    rates: mergeIoRates(existing.rates, parseIoRates(stats), mergedInfo) ?? existing.rates,
     live: parseLiveStats(stats) ?? existing.live,
     info: sanitizePublicInfo(mergedInfo) ?? existing.info,
   };

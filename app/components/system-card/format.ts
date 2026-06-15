@@ -55,30 +55,61 @@ export function formatLastSeen(updated: string, now: Date) {
   return `${days}d ago`;
 }
 
-export function formatDiskIoUsed(system: PublicSystem) {
-  return formatMbPerSecond(system.rates?.diskRead);
+function resolveDiskRates(system: PublicSystem) {
+  const { diskRead, diskWrite } = system.history;
+  const i = diskRead.length - 1;
+  const histRead = i >= 0 ? diskRead[i] : undefined;
+  const histWrite = i >= 0 ? diskWrite[i] : undefined;
+
+  return {
+    read: system.rates?.diskRead ?? histRead,
+    write: system.rates?.diskWrite ?? histWrite,
+  };
+}
+
+export function formatDiskIoRead(system: PublicSystem) {
+  return formatMbPerSecond(resolveDiskRates(system).read);
 }
 
 export function formatDiskIoWrite(system: PublicSystem) {
-  return formatMbPerSecond(system.rates?.diskWrite);
+  return formatMbPerSecond(resolveDiskRates(system).write);
+}
+
+/** Headline throughput — matches sparkline (read + write). */
+export function formatDiskIoUsed(system: PublicSystem) {
+  const { read, write } = resolveDiskRates(system);
+  const combined = (read ?? 0) + (write ?? 0);
+  if (combined > 0) return formatMbPerSecond(combined);
+  return formatMbPerSecond(read);
+}
+
+export function formatPct(value: number) {
+  return `${value.toFixed(1)}%`;
+}
+
+function resolveNetRates(system: PublicSystem) {
+  const { netSent, netRecv } = system.history;
+  const i = netSent.length - 1;
+  return {
+    sent: system.rates?.netSent ?? (i >= 0 ? netSent[i] : undefined),
+    recv: system.rates?.netRecv ?? (i >= 0 ? netRecv[i] : undefined),
+  };
 }
 
 export function formatNetSent(system: PublicSystem) {
-  return formatMbPerSecond(system.rates?.netSent);
+  return formatMbPerSecond(resolveNetRates(system).sent);
 }
 
 export function formatNetRecv(system: PublicSystem) {
-  return formatMbPerSecond(system.rates?.netRecv);
+  return formatMbPerSecond(resolveNetRates(system).recv);
 }
 
-export function diskIoChartData(system: PublicSystem) {
-  const { diskRead, diskWrite } = system.history;
-  return diskRead.map((r, i) => r + (diskWrite[i] ?? 0));
-}
-
-export function netChartData(system: PublicSystem) {
-  const { netSent, netRecv } = system.history;
-  return netSent.map((r, i) => r + (netRecv[i] ?? 0));
+/** Headline throughput — sent + recv. */
+export function formatNetUsed(system: PublicSystem) {
+  const { sent, recv } = resolveNetRates(system);
+  const combined = (sent ?? 0) + (recv ?? 0);
+  if (combined > 0) return formatMbPerSecond(combined);
+  return formatMbPerSecond(sent);
 }
 
 export function formatGb(gb: number) {
