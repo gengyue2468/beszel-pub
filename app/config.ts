@@ -5,7 +5,6 @@ export const config = {
     clockTagline: "Where the time is",
   },
   dashboard: {
-    pollIntervalMs: 5_000,
     statusTitle: "Server Status",
     emptyServersMessage: "No monitored servers",
   },

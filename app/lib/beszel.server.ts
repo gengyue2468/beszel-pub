@@ -1,4 +1,5 @@
 import type { AxiosInstance } from "axios";
+import type { DashboardData } from "~/lib/dashboard";
 import { loadEnvFile } from "~/lib/env.server";
 import { createHttpClient, HttpError, setAuthToken } from "~/lib/http.server";
 
@@ -27,6 +28,7 @@ export interface BeszelSystemInfo {
   os?: number;
   m?: string;
   c?: number;
+  k?: string;
   la?: [number, number, number];
   l1?: number;
   l5?: number;
@@ -59,7 +61,7 @@ interface SystemStatsPayload {
   ni?: Record<string, [number, number, number, number]>;
 }
 
-interface BeszelSystemRecord {
+export interface BeszelSystemRecord {
   id: string;
   name: string;
   host: string;
@@ -73,16 +75,32 @@ interface SystemStatRecord {
   stats?: SystemStatsPayload;
 }
 
-interface SystemDetailsRecord {
-  hostname?: string;
-  os_name?: string;
-  cpu?: string;
-  cores?: number;
-  threads?: number;
-  memory?: number;
-  kernel?: string;
-  arch?: string;
+export interface SystemStatPbRecord {
+  id: string;
+  system: string;
+  type?: string;
+  stats?: SystemStatsPayload;
 }
+
+export type BeszelCollectionEvent = {
+  kind: "collection";
+  collection: "systems" | "system_stats";
+  action: "create" | "update" | "delete";
+  record: Record<string, unknown>;
+};
+
+export interface RtMetricsPayload {
+  stats?: SystemStatsPayload;
+  info?: BeszelSystemInfo;
+}
+
+export type BeszelRtMetricsEvent = {
+  kind: "rt_metrics";
+  systemId: string;
+  data: RtMetricsPayload;
+};
+
+export type BeszelRealtimeEvent = BeszelCollectionEvent | BeszelRtMetricsEvent;
 
 export interface SystemSpec {
   cpu?: string;
@@ -123,6 +141,27 @@ export interface SystemHistory {
   netRecv: number[];
 }
 
+interface SystemDetailsRecord {
+  id: string;
+  system: string;
+  hostname: string;
+  kernel: string;
+  cores: number;
+  threads: number;
+  cpu: string;
+  os_name: string;
+  memory: number;
+  podman: boolean;
+  arch?: string;
+}
+
+export interface SystemProfile {
+  id: string;
+  name: string;
+  os?: string;
+  spec?: SystemSpec;
+}
+
 export interface PublicSystem {
   id: string;
   name: string;
@@ -146,25 +185,40 @@ interface AuthResponse {
 }
 
 const HISTORY_POINTS = 20;
+const OS_NAMES = ["Linux", "macOS", "Windows", "FreeBSD"];
 
-function getBeszelUpstream() {
+export const EMPTY_HISTORY: SystemHistory = {
+  cpu: [],
+  mem: [],
+  diskRead: [],
+  diskWrite: [],
+  netSent: [],
+  netRecv: [],
+};
+
+export function getBeszelUrl() {
   const url = process.env.BESZEL_URL?.replace(/\/$/, "");
   if (!url) throw new Error("Need BESZEL_URL environment variable");
   return url;
 }
 
 function getConfig() {
-  const url = getBeszelUpstream();
+  const url = getBeszelUrl();
   const email = process.env.BESZEL_EMAIL;
   const password = process.env.BESZEL_PASSWORD;
   const token = process.env.BESZEL_TOKEN;
 
-  if (!process.env.BESZEL_URL) throw new Error("Need BESZEL_URL environment variable");
   if (!token && (!email || !password)) {
     throw new Error("Need BESZEL_TOKEN or BESZEL_EMAIL / BESZEL_PASSWORD");
   }
 
   return { url, email, password, token };
+}
+
+export async function getBeszelAuthToken() {
+  const { email, password, token: envToken } = getConfig();
+  if (envToken) return envToken;
+  return getAuthToken(email!, password!);
 }
 
 function bytesPerSecToMb(bytesPerSec: number) {
@@ -252,11 +306,94 @@ async function getAuthToken(email: string, password: string) {
 }
 
 async function createAuthenticatedClient() {
-  const { url, email, password, token: envToken } = getConfig();
-  const client = createHttpClient(url);
-  const token = envToken ?? (await getAuthToken(email!, password!));
-  setAuthToken(client, token);
+  const client = createHttpClient(getConfig().url);
+  setAuthToken(client, await getBeszelAuthToken());
   return client;
+}
+
+function sanitizePublicSpec(spec?: SystemSpec): SystemSpec | undefined {
+  if (!spec) return undefined;
+
+  const out: SystemSpec = {};
+  if (spec.cpu != null) out.cpu = spec.cpu;
+  if (spec.cores != null) out.cores = spec.cores;
+  if (spec.threads != null) out.threads = spec.threads;
+  if (spec.memoryBytes != null) out.memoryBytes = spec.memoryBytes;
+  if (spec.kernel != null) out.kernel = spec.kernel;
+  if (spec.arch != null) out.arch = spec.arch;
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function osFromInfo(info?: BeszelSystemInfo) {
+  return info?.o ?? (info?.os != null && OS_NAMES[info.os] ? OS_NAMES[info.os] : undefined);
+}
+
+function specFromInfo(info?: BeszelSystemInfo): SystemSpec | undefined {
+  return specFromDetails(info);
+}
+
+function specFromDetails(
+  info?: BeszelSystemInfo,
+  details?: SystemDetailsRecord,
+): SystemSpec | undefined {
+  return sanitizePublicSpec({
+    cpu: details?.cpu ?? info?.m,
+    cores: details?.cores ?? info?.c,
+    threads: details?.threads ?? info?.t,
+    memoryBytes: details?.memory,
+    kernel: details?.kernel ?? info?.k,
+    arch: details?.arch,
+  });
+}
+
+function mergeStaticSpec(next?: SystemSpec, prev?: SystemSpec): SystemSpec | undefined {
+  if (!next && !prev) return undefined;
+  return sanitizePublicSpec({ ...prev, ...next });
+}
+
+function toSystemProfile(
+  record: BeszelSystemRecord,
+  details?: SystemDetailsRecord,
+): SystemProfile {
+  return {
+    id: record.id,
+    name: record.name,
+    os: details?.os_name ?? osFromInfo(record.info),
+    spec: specFromDetails(record.info, details),
+  };
+}
+
+async function fetchSystemDetailsMap(client: AxiosInstance) {
+  try {
+    const { data } = await client.get<PocketBaseListResponse<SystemDetailsRecord>>(
+      "/api/collections/system_details/records",
+      { params: { perPage: 500 } },
+    );
+    return new Map(data.items.map((item) => [item.system, item]));
+  } catch {
+    return new Map<string, SystemDetailsRecord>();
+  }
+}
+
+export async function loadSystemProfiles(): Promise<SystemProfile[]> {
+  const client = await createAuthenticatedClient();
+
+  try {
+    const [{ data }, detailsMap] = await Promise.all([
+      client.get<PocketBaseListResponse<BeszelSystemRecord>>(
+        "/api/collections/systems/records",
+        { params: { sort: "name" } },
+      ),
+      fetchSystemDetailsMap(client),
+    ]);
+
+    return data.items.map((record) =>
+      toSystemProfile(record, detailsMap.get(record.id)),
+    );
+  } catch (error) {
+    wrapError("Failed to fetch system profiles", error);
+  }
 }
 
 async function fetchSystemHistory(
@@ -356,54 +493,41 @@ function parseNetworkTotals(stats?: SystemStatsPayload): NetworkTotals | undefin
   return { upload, download };
 }
 
-async function fetchSystemDetails(
-  client: AxiosInstance,
-  systemId: string,
-  info?: BeszelSystemInfo,
-): Promise<{ os?: string; spec?: SystemSpec }> {
-  const OS_NAMES = ["Linux", "macOS", "Windows", "FreeBSD"];
-  const fallbackOs =
-    info?.o ?? (info?.os != null && OS_NAMES[info.os] ? OS_NAMES[info.os] : undefined);
+export async function fetchDashboardData(): Promise<PublicSystem[]> {
+  const client = await createAuthenticatedClient();
 
   try {
-    const { data } = await client.get<SystemDetailsRecord>(
-      `/api/collections/system_details/records/${systemId}`,
+    const [{ data }, detailsMap] = await Promise.all([
+      client.get<PocketBaseListResponse<BeszelSystemRecord>>(
+        "/api/collections/systems/records",
+        { params: { sort: "name" } },
+      ),
+      fetchSystemDetailsMap(client),
+    ]);
+
+    return Promise.all(
+      data.items.map(async (record) => {
+        const details = detailsMap.get(record.id);
+        const { history, network, rates, loadStats, live } = await fetchSystemHistory(
+          client,
+          record.id,
+        );
+        const info = mergeLoadInfo(record.info, loadStats);
+        return toPublicSystem(
+          record,
+          info,
+          history,
+          details?.os_name ?? osFromInfo(record.info),
+          specFromDetails(record.info, details),
+          live,
+          network,
+          mergeRates(rates, info),
+        );
+      }),
     );
-    return {
-      os: fallbackOs ?? data.os_name,
-      spec: sanitizePublicSpec({
-        cpu: data.cpu ?? info?.m,
-        cores: data.cores ?? info?.c,
-        threads: data.threads ?? info?.t,
-        memoryBytes: data.memory,
-        kernel: data.kernel,
-        arch: data.arch,
-      }),
-    };
-  } catch {
-    return {
-      os: fallbackOs,
-      spec: sanitizePublicSpec({
-        cpu: info?.m,
-        cores: info?.c,
-        threads: info?.t,
-      }),
-    };
+  } catch (error) {
+    wrapError("Failed to fetch system list", error);
   }
-}
-
-function sanitizePublicSpec(spec?: SystemSpec): SystemSpec | undefined {
-  if (!spec) return undefined;
-
-  const out: SystemSpec = {};
-  if (spec.cpu != null) out.cpu = spec.cpu;
-  if (spec.cores != null) out.cores = spec.cores;
-  if (spec.threads != null) out.threads = spec.threads;
-  if (spec.memoryBytes != null) out.memoryBytes = spec.memoryBytes;
-  if (spec.kernel != null) out.kernel = spec.kernel;
-  if (spec.arch != null) out.arch = spec.arch;
-
-  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function sanitizePublicInfo(info?: BeszelSystemInfo): PublicSystemInfo | undefined {
@@ -449,44 +573,92 @@ function toPublicSystem(
   };
 }
 
-export async function fetchDashboardData(): Promise<PublicSystem[]> {
-  const client = await createAuthenticatedClient();
-
-  try {
-    const { data } = await client.get<PocketBaseListResponse<BeszelSystemRecord>>(
-      "/api/collections/systems/records",
-      { params: { sort: "name" } },
-    );
-
-    return Promise.all(
-      data.items.map(async (record) => {
-        const [{ history, network, rates, loadStats, live }, details] = await Promise.all([
-          fetchSystemHistory(client, record.id),
-          fetchSystemDetails(client, record.id, record.info),
-        ]);
-        const info = mergeLoadInfo(record.info, loadStats);
-        return toPublicSystem(
-          record,
-          info,
-          history,
-          details.os,
-          details.spec,
-          live,
-          network,
-          mergeRates(rates, info),
-        );
-      }),
-    );
-  } catch (error) {
-    wrapError("Failed to fetch system list", error);
-  }
+function ratesFromInfo(info?: BeszelSystemInfo): IoRates | undefined {
+  if (!info) return undefined;
+  const payload = info as BeszelSystemInfo & { dio?: [number, number]; b?: [number, number] };
+  return mergeRates(parseIoRates({ b: payload.b, dio: payload.dio }), info);
 }
 
-export type DashboardData = {
-  systems: PublicSystem[];
-  error: string | null;
-  fetchedAt: string;
-};
+function pushHistory(values: number[], value: number) {
+  const next = [...values, value];
+  if (next.length > HISTORY_POINTS) next.shift();
+  return next;
+}
+
+export function applyRtMetrics(
+  existing: PublicSystem,
+  data: RtMetricsPayload,
+): PublicSystem {
+  const mergedInfo = data.info
+    ? ({ ...(existing.info as BeszelSystemInfo | undefined), ...data.info } as BeszelSystemInfo)
+    : (existing.info as BeszelSystemInfo | undefined);
+  const info = mergeLoadInfo(mergedInfo, data.stats);
+
+  return {
+    ...existing,
+    info: sanitizePublicInfo(info) ?? existing.info,
+    rates:
+      (data.stats ? mergeRates(parseIoRates(data.stats), info) : undefined) ??
+      ratesFromInfo(info) ??
+      existing.rates,
+    live: (data.stats ? parseLiveStats(data.stats) : undefined) ?? existing.live,
+  };
+}
+
+export function applySystemRecord(
+  existing: PublicSystem,
+  record: BeszelSystemRecord,
+): PublicSystem {
+  const info = record.info;
+  return {
+    ...existing,
+    name: record.name,
+    status: record.status,
+    updated: record.updated,
+    os: osFromInfo(info) ?? existing.os,
+    spec: mergeStaticSpec(specFromInfo(info), existing.spec),
+    info: sanitizePublicInfo(info) ?? existing.info,
+    rates: ratesFromInfo(info) ?? existing.rates,
+  };
+}
+
+export function applySystemStat(
+  existing: PublicSystem,
+  record: SystemStatPbRecord,
+): PublicSystem | null {
+  if (record.type && record.type !== "1m") return null;
+  const stats = record.stats;
+  if (!stats) return null;
+
+  const mergedInfo = mergeLoadInfo(
+    existing.info as BeszelSystemInfo | undefined,
+    stats,
+  );
+
+  return {
+    ...existing,
+    history: {
+      cpu: pushHistory(existing.history.cpu, stats.cpu ?? 0),
+      mem: pushHistory(existing.history.mem, stats.mp ?? 0),
+      diskRead: pushHistory(existing.history.diskRead, diskReadMb(stats)),
+      diskWrite: pushHistory(existing.history.diskWrite, diskWriteMb(stats)),
+      netSent: pushHistory(existing.history.netSent, netSentMb(stats)),
+      netRecv: pushHistory(existing.history.netRecv, netRecvMb(stats)),
+    },
+    network: parseNetworkTotals(stats) ?? existing.network,
+    rates: mergeRates(parseIoRates(stats), mergedInfo) ?? existing.rates,
+    live: parseLiveStats(stats) ?? existing.live,
+    info: sanitizePublicInfo(mergedInfo) ?? existing.info,
+  };
+}
+
+export function dashboardFromSystems(systems: PublicSystem[]): DashboardData {
+  return {
+    systems: [...systems].sort((a, b) => a.name.localeCompare(b.name)),
+    error: null,
+    fetchedAt: new Date().toISOString(),
+  };
+}
 
 function formatDashboardError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);

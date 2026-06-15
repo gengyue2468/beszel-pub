@@ -50,7 +50,7 @@ export function SortSelect({
       }}
       modal={false}
     >
-      <Select.Trigger className="inline-flex items-center gap-1 border border-border bg-background-subtle px-1.5 py-1 text-xs text-foreground-muted outline-none data-popup-open:text-foreground">
+      <Select.Trigger className="inline-flex items-center gap-1 border border-border bg-background-subtle px-1.5 py-1 text-xs md:text-sm text-foreground-muted outline-none data-popup-open:text-foreground">
         <span>Sort by</span>
         <Select.Value />
         <Select.Icon className="text-foreground-muted">
@@ -58,14 +58,14 @@ export function SortSelect({
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
-        <Select.Positioner sideOffset={4} align="end">
-          <Select.Popup className="min-w-32 rounded border border-border bg-background-subtle py-0.5 shadow-sm outline-none">
+        <Select.Positioner sideOffset={4}>
+          <Select.Popup className="min-w-32 rounded border border-border bg-background-subtle py-0 shadow-sm outline-none">
             <Select.List className="outline-none">
               {SORT_OPTIONS.map(({ label, value: optionValue }) => (
                 <Select.Item
                   key={optionValue}
                   value={optionValue}
-                  className="flex w-full cursor-default items-center justify-between gap-2 px-1.5 py-1 text-xs outline-none data-highlighted:bg-background-muted data-selected:text-foreground"
+                  className="flex w-full cursor-default items-center justify-between gap-2 px-1.5 py-1 text-xs md:text-sm outline-none data-highlighted:bg-background-muted data-selected:text-foreground"
                 >
                   <Select.ItemText>{label}</Select.ItemText>
                   <Select.ItemIndicator className="w-3 shrink-0 text-success">

@@ -29,10 +29,10 @@ function ChartHoverCard({
 
   return (
     <div className="rounded border border-border bg-background-subtle px-1.5 py-1 shadow-sm">
-      <div className="text-foreground-muted text-xs">
+      <div className="text-foreground-muted text-xs md:text-sm">
         {labelFormatter(point.i, total)}
       </div>
-      <div className="text-xs tabular-nums">{valueFormatter(point.v)}</div>
+      <div className="text-xs md:text-sm tabular-nums">{valueFormatter(point.v)}</div>
     </div>
   );
 }
@@ -42,20 +42,23 @@ export function Sparkline({
   className,
   valueFormatter = (v) => `${v.toFixed(1)}%`,
   labelFormatter,
+  size = "md",
 }: {
   data: number[];
   className?: string;
   valueFormatter?: (value: number) => string;
   labelFormatter?: (index: number, total: number) => string;
+  size?: "sm" | "md";
 }) {
-  const [mounted, setMounted] = useState(false);
+  const heightClass = size === "sm" ? "h-6" : "h-10";
+  const [mounted, setMounted] = useState(() => typeof document !== "undefined");
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
   if (data.length < 2) {
-    return <div className={`h-10 min-w-0 bg-background-muted ${className ?? ""}`} />;
+    return <div className={`${heightClass} min-w-0 bg-background-muted ${className ?? ""}`} />;
   }
 
   const chartData = data.map((v, i) => ({ i, v }));
@@ -69,11 +72,11 @@ export function Sparkline({
     });
 
   if (!mounted) {
-    return <div className={`h-10 min-w-0 w-full bg-background-muted ${className ?? ""}`} />;
+    return <div className={`${heightClass} min-w-0 w-full bg-background-muted ${className ?? ""}`} />;
   }
 
   return (
-    <div className={`h-10 min-w-0 w-full overflow-visible ${className ?? ""}`}>
+    <div className={`${heightClass} min-w-0 w-full overflow-visible ${className ?? ""}`}>
       <ResponsiveContainer width="100%" height="100%" minWidth={0}>
         <AreaChart
           data={chartData}
