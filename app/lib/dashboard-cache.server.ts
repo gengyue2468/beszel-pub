@@ -4,6 +4,8 @@ import {
   applySystemStat,
   applyRtMetrics,
   dashboardFromSystems,
+  loadPublicSystemById,
+  publicSystemFromRecord,
   type BeszelRealtimeEvent,
   type BeszelSystemRecord,
   type PublicSystem,
@@ -21,6 +23,14 @@ function asSystemRecord(record: Record<string, unknown>): BeszelSystemRecord {
 
 function asStatRecord(record: Record<string, unknown>): SystemStatPbRecord {
   return record as unknown as SystemStatPbRecord;
+}
+
+function systemIdFromRecord(record: Record<string, unknown>) {
+  return String(record.id ?? "");
+}
+
+export function hasCachedSystem(systemId: string) {
+  return systems.has(systemId);
 }
 
 export async function ensureDashboardCache(): Promise<DashboardData> {
@@ -44,6 +54,16 @@ export async function refreshDashboardCache(): Promise<DashboardData> {
   return data;
 }
 
+export async function enrichSystemInCache(systemId: string): Promise<DashboardData | null> {
+  if (!ready || !systems.has(systemId)) return null;
+
+  const full = await loadPublicSystemById(systemId);
+  if (!full || !systems.has(systemId)) return null;
+
+  systems.set(systemId, full);
+  return dashboardFromSystems([...systems.values()]);
+}
+
 export function applyDashboardEvent(event: BeszelRealtimeEvent): DashboardData | null {
   if (!ready) return null;
 
@@ -58,18 +78,28 @@ export function applyDashboardEvent(event: BeszelRealtimeEvent): DashboardData |
   const { collection, action, record } = event;
 
   if (collection === "systems") {
-    const id = String(record.id ?? "");
+    const id = systemIdFromRecord(record);
+    if (!id) return null;
 
     if (action === "delete") {
       systems.delete(id);
       return dashboardFromSystems([...systems.values()]);
     }
 
+    const systemRecord = asSystemRecord(record);
+
     if (action === "create" || !systems.has(id)) {
-      return null;
+      const existing = systems.get(id);
+      systems.set(
+        id,
+        existing
+          ? applySystemRecord(existing, systemRecord)
+          : publicSystemFromRecord(systemRecord),
+      );
+      return dashboardFromSystems([...systems.values()]);
     }
 
-    systems.set(id, applySystemRecord(systems.get(id)!, asSystemRecord(record)));
+    systems.set(id, applySystemRecord(systems.get(id)!, systemRecord));
     return dashboardFromSystems([...systems.values()]);
   }
 

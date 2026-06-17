@@ -2,6 +2,8 @@ import type { DashboardData } from "~/lib/dashboard";
 import {
   applyDashboardEvent,
   ensureDashboardCache,
+  enrichSystemInCache,
+  hasCachedSystem,
   refreshDashboardCache,
 } from "~/lib/dashboard-cache.server";
 import { subscribeBeszelChanges, setBeszelSystemIds } from "~/lib/beszel-realtime.server";
@@ -21,6 +23,8 @@ let pingTimer: ReturnType<typeof setInterval> | null = null;
 let unsubscribeBeszel: (() => void) | null = null;
 let refreshPromise: Promise<void> | null = null;
 let hubStarting: Promise<void> | null = null;
+let refreshGeneration = 0;
+const pendingEnrich = new Set<string>();
 
 function encodeEvent(data: DashboardData) {
   return `data: ${JSON.stringify(data)}\n\n`;
@@ -61,12 +65,23 @@ function broadcast(data: DashboardData, immediate = false) {
   }, BROADCAST_MS);
 }
 
+function syncSystemSubscriptions(data: DashboardData) {
+  setBeszelSystemIds(data.systems.map((system) => system.id));
+}
+
+function invalidatePendingRefresh() {
+  refreshGeneration++;
+}
+
 async function fullRefresh() {
   if (refreshPromise) return refreshPromise;
 
+  const generation = refreshGeneration;
+
   refreshPromise = refreshDashboardCache()
     .then((data) => {
-      setBeszelSystemIds(data.systems.map((system) => system.id));
+      if (generation !== refreshGeneration) return;
+      syncSystemSubscriptions(data);
       broadcast(data, true);
     })
     .finally(() => {
@@ -76,25 +91,61 @@ async function fullRefresh() {
   return refreshPromise;
 }
 
+function shouldInvalidateRefresh(
+  event: Parameters<typeof applyDashboardEvent>[0],
+  existedBefore: boolean,
+) {
+  if (event.kind !== "collection" || event.collection !== "systems") return false;
+  if (event.action === "delete") return true;
+  if (event.action === "create") return !existedBefore;
+  return event.action === "update" && !existedBefore;
+}
+
+async function enrichSystemAndBroadcast(systemId: string) {
+  const data = await enrichSystemInCache(systemId);
+  if (!data) return;
+  broadcast(data, true);
+}
+
+function scheduleEnrich(systemId: string) {
+  if (pendingEnrich.has(systemId)) return;
+  pendingEnrich.add(systemId);
+  void enrichSystemAndBroadcast(systemId).finally(() => {
+    pendingEnrich.delete(systemId);
+  });
+}
+
 function handleBeszelEvent(event: Parameters<typeof applyDashboardEvent>[0]) {
-  if (
-    event.kind === "collection" &&
-    event.collection === "systems" &&
-    event.action === "create"
-  ) {
-    void fullRefresh();
-    return;
+  const isSystems =
+    event.kind === "collection" && event.collection === "systems";
+  const systemId =
+    isSystems ? String(event.record.id ?? "") : "";
+  const existedBefore = systemId !== "" && hasCachedSystem(systemId);
+
+  if (isSystems && event.action === "delete" && systemId) {
+    pendingEnrich.delete(systemId);
+  }
+
+  if (shouldInvalidateRefresh(event, existedBefore)) {
+    invalidatePendingRefresh();
   }
 
   const updated = applyDashboardEvent(event);
   if (updated) {
+    if (isSystems) {
+      syncSystemSubscriptions(updated);
+      broadcast(updated, true);
+      if (event.action !== "delete" && systemId && !existedBefore) {
+        scheduleEnrich(systemId);
+      }
+      return;
+    }
+
     broadcast(updated, event.kind === "rt_metrics");
     return;
   }
 
-  if (event.kind === "collection" && event.collection === "systems") {
-    void fullRefresh();
-  }
+  if (isSystems) void fullRefresh();
 }
 
 function startHub() {
@@ -103,7 +154,7 @@ function startHub() {
   hubStarting = (async () => {
     try {
       const data = await ensureDashboardCache();
-      setBeszelSystemIds(data.systems.map((system) => system.id));
+      syncSystemSubscriptions(data);
       broadcast(data, true);
       unsubscribeBeszel = subscribeBeszelChanges(handleBeszelEvent);
     } finally {

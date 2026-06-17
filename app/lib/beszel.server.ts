@@ -559,6 +559,56 @@ function parseNetworkTotals(stats?: SystemStatsPayload): NetworkTotals | undefin
   return { upload, download };
 }
 
+export function publicSystemFromRecord(record: BeszelSystemRecord): PublicSystem {
+  return toPublicSystem(
+    record,
+    record.info,
+    EMPTY_HISTORY,
+    osFromInfo(record.info),
+    specFromInfo(record.info),
+    undefined,
+    undefined,
+    ratesFromInfo(record.info),
+  );
+}
+
+async function buildPublicSystem(
+  client: AxiosInstance,
+  record: BeszelSystemRecord,
+  detailsMap: Map<string, SystemDetailsRecord>,
+): Promise<PublicSystem> {
+  const details = detailsMap.get(record.id);
+  const { history, network, rates, loadStats, live } = await fetchSystemHistory(
+    client,
+    record.id,
+  );
+  const info = mergeLoadInfo(record.info, loadStats);
+  return toPublicSystem(
+    record,
+    info,
+    history,
+    details?.os_name ?? osFromInfo(record.info),
+    specFromDetails(record.info, details),
+    live,
+    network,
+    mergeIoRates(undefined, rates, info),
+  );
+}
+
+export async function loadPublicSystemById(systemId: string): Promise<PublicSystem | null> {
+  const client = await createAuthenticatedClient();
+
+  try {
+    const [{ data: record }, detailsMap] = await Promise.all([
+      client.get<BeszelSystemRecord>(`/api/collections/systems/records/${systemId}`),
+      fetchSystemDetailsMap(client),
+    ]);
+    return buildPublicSystem(client, record, detailsMap);
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchDashboardData(): Promise<PublicSystem[]> {
   const client = await createAuthenticatedClient();
 
@@ -572,24 +622,7 @@ export async function fetchDashboardData(): Promise<PublicSystem[]> {
     ]);
 
     return Promise.all(
-      data.items.map(async (record) => {
-        const details = detailsMap.get(record.id);
-        const { history, network, rates, loadStats, live } = await fetchSystemHistory(
-          client,
-          record.id,
-        );
-        const info = mergeLoadInfo(record.info, loadStats);
-        return toPublicSystem(
-          record,
-          info,
-          history,
-          details?.os_name ?? osFromInfo(record.info),
-          specFromDetails(record.info, details),
-          live,
-          network,
-          mergeIoRates(undefined, rates, info),
-        );
-      }),
+      data.items.map((record) => buildPublicSystem(client, record, detailsMap)),
     );
   } catch (error) {
     wrapError("Failed to fetch system list", error);
