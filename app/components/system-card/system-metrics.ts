@@ -30,8 +30,9 @@ export type ChartMetricConfig = {
   label: string;
   used: string;
   total: string;
-  data?: number[];
+  data?: (number | null)[];
   series?: SparklineSeries[];
+  times?: string[];
   colorClass?: string;
   fill?: string;
   caption?: string | null;
@@ -95,6 +96,7 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
   const services = info?.sv;
   const ramUsed = formatRamUsedGb(system);
   const ramTotal = formatRamTotal(system);
+  const times = system.history.times;
 
   return [
     {
@@ -103,6 +105,7 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       used: formatCpuUsed(system),
       total: formatCpuTotal(system),
       data: system.history.cpu,
+      times,
       colorClass: "text-chart-blue",
       fill: "var(--chart-blue-fill)",
       caption: formatCpuCaption(system),
@@ -126,6 +129,7 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       used: formatRamPct(system),
       total: formatRamTotal(system),
       series: RAM_SERIES(system),
+      times,
       caption: formatRamUsedGb(system),
       tooltipFormatter: formatPct,
       listFooter: [{ type: "line", text: `${ramUsed}/${ramTotal}` }],
@@ -136,6 +140,7 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       used: formatDiskIoUsed(system),
       total: formatDiskIoWrite(system),
       series: DISK_IO_SERIES(system),
+      times,
       caption: formatDiskIoRead(system),
       tooltipFormatter: formatIoTooltip,
       listFooter: [`DISK ${formatDiskValue(system)}`].map((text) => ({
@@ -149,6 +154,7 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       used: formatNetUsed(system),
       total: formatNetRecv(system),
       series: NET_SERIES(system),
+      times,
       caption: formatNetSent(system),
       tooltipFormatter: formatIoTooltip,
       listFooter: [

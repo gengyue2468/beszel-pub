@@ -72,6 +72,7 @@ export interface BeszelSystemRecord {
 }
 
 interface SystemStatRecord {
+  created?: string;
   stats?: SystemStatsPayload;
 }
 
@@ -79,6 +80,7 @@ export interface SystemStatPbRecord {
   id: string;
   system: string;
   type?: string;
+  created?: string;
   stats?: SystemStatsPayload;
 }
 
@@ -132,14 +134,17 @@ export interface IoRates {
   netRecv?: number;
 }
 
+export type HistoryValue = number | null;
+
 export interface SystemHistory {
-  cpu: number[];
-  mem: number[];
-  swap: number[];
-  diskRead: number[];
-  diskWrite: number[];
-  netSent: number[];
-  netRecv: number[];
+  times: string[];
+  cpu: HistoryValue[];
+  mem: HistoryValue[];
+  swap: HistoryValue[];
+  diskRead: HistoryValue[];
+  diskWrite: HistoryValue[];
+  netSent: HistoryValue[];
+  netRecv: HistoryValue[];
 }
 
 interface SystemDetailsRecord {
@@ -186,9 +191,12 @@ interface AuthResponse {
 }
 
 const HISTORY_POINTS = 20;
+const STAT_INTERVAL_MS = 60_000;
+const GAP_THRESHOLD_MS = STAT_INTERVAL_MS * 1.5;
 const OS_NAMES = ["Linux", "macOS", "Windows", "FreeBSD"];
 
 export const EMPTY_HISTORY: SystemHistory = {
+  times: [],
   cpu: [],
   mem: [],
   swap: [],
@@ -197,6 +205,112 @@ export const EMPTY_HISTORY: SystemHistory = {
   netSent: [],
   netRecv: [],
 };
+
+function historyValuesFromStats(stats?: SystemStatsPayload) {
+  return {
+    cpu: stats?.cpu ?? null,
+    mem: stats?.mp ?? null,
+    swap: stats ? swapPct(stats) : null,
+    diskRead: stats ? diskReadMb(stats) : null,
+    diskWrite: stats ? diskWriteMb(stats) : null,
+    netSent: stats ? netSentMb(stats) : null,
+    netRecv: stats ? netRecvMb(stats) : null,
+  };
+}
+
+function appendGapPoint(history: SystemHistory, gapTime: string): SystemHistory {
+  return {
+    times: [...history.times, gapTime],
+    cpu: [...history.cpu, null],
+    mem: [...history.mem, null],
+    swap: [...history.swap, null],
+    diskRead: [...history.diskRead, null],
+    diskWrite: [...history.diskWrite, null],
+    netSent: [...history.netSent, null],
+    netRecv: [...history.netRecv, null],
+  };
+}
+
+function trimHistory(history: SystemHistory): SystemHistory {
+  if (history.times.length <= HISTORY_POINTS) return history;
+  const trim = history.times.length - HISTORY_POINTS;
+  return {
+    times: history.times.slice(trim),
+    cpu: history.cpu.slice(trim),
+    mem: history.mem.slice(trim),
+    swap: history.swap.slice(trim),
+    diskRead: history.diskRead.slice(trim),
+    diskWrite: history.diskWrite.slice(trim),
+    netSent: history.netSent.slice(trim),
+    netRecv: history.netRecv.slice(trim),
+  };
+}
+
+function buildHistoryFromStatRecords(items: SystemStatRecord[]): SystemHistory {
+  let history = EMPTY_HISTORY;
+
+  for (const item of items) {
+    const created = item.created;
+    if (!created) continue;
+
+    if (history.times.length > 0) {
+      const lastTime = history.times[history.times.length - 1]!;
+      const gapMs = new Date(created).getTime() - new Date(lastTime).getTime();
+      if (gapMs > GAP_THRESHOLD_MS) {
+        history = appendGapPoint(
+          history,
+          new Date(new Date(lastTime).getTime() + STAT_INTERVAL_MS).toISOString(),
+        );
+      }
+    }
+
+    const values = historyValuesFromStats(item.stats);
+    history = {
+      times: [...history.times, created],
+      cpu: [...history.cpu, values.cpu],
+      mem: [...history.mem, values.mem],
+      swap: [...history.swap, values.swap],
+      diskRead: [...history.diskRead, values.diskRead],
+      diskWrite: [...history.diskWrite, values.diskWrite],
+      netSent: [...history.netSent, values.netSent],
+      netRecv: [...history.netRecv, values.netRecv],
+    };
+  }
+
+  return trimHistory(history);
+}
+
+function appendStatToHistory(
+  history: SystemHistory,
+  created: string,
+  stats: SystemStatsPayload,
+): SystemHistory {
+  const lastTime = history.times[history.times.length - 1];
+  if (lastTime === created) return history;
+
+  let next = history;
+  if (lastTime) {
+    const gapMs = new Date(created).getTime() - new Date(lastTime).getTime();
+    if (gapMs > GAP_THRESHOLD_MS) {
+      next = appendGapPoint(
+        next,
+        new Date(new Date(lastTime).getTime() + STAT_INTERVAL_MS).toISOString(),
+      );
+    }
+  }
+
+  const values = historyValuesFromStats(stats);
+  return trimHistory({
+    times: [...next.times, created],
+    cpu: [...next.cpu, values.cpu],
+    mem: [...next.mem, values.mem],
+    swap: [...next.swap, values.swap],
+    diskRead: [...next.diskRead, values.diskRead],
+    diskWrite: [...next.diskWrite, values.diskWrite],
+    netSent: [...next.netSent, values.netSent],
+    netRecv: [...next.netRecv, values.netRecv],
+  });
+}
 
 function swapPct(stats?: SystemStatsPayload) {
   if (!stats?.s) return 0;
@@ -484,25 +598,20 @@ async function fetchSystemHistory(
     const latest = data.items[0]?.stats;
 
     return {
-      history: {
-        cpu: items.map((r) => r.stats?.cpu ?? 0),
-        mem: items.map((r) => r.stats?.mp ?? 0),
-        swap: items.map((r) => swapPct(r.stats)),
-        diskRead: items.map((r) => diskReadMb(r.stats)),
-        diskWrite: items.map((r) => diskWriteMb(r.stats)),
-        netSent: items.map((r) => netSentMb(r.stats)),
-        netRecv: items.map((r) => netRecvMb(r.stats)),
-      },
+      history: buildHistoryFromStatRecords(items),
       network: parseNetworkTotals(latest),
       rates: parseIoRates(latest),
       loadStats: latest,
       live: parseLiveStats(latest),
     };
   } catch {
-    return {
-      history: { cpu: [], mem: [], swap: [], diskRead: [], diskWrite: [], netSent: [], netRecv: [] },
-    };
+    return { history: EMPTY_HISTORY };
   }
+}
+
+export async function loadSystemHistoryBundle(systemId: string) {
+  const client = await createAuthenticatedClient();
+  return fetchSystemHistory(client, systemId);
 }
 
 function parseLiveStats(stats?: SystemStatsPayload): SystemLiveStats | undefined {
@@ -595,20 +704,6 @@ async function buildPublicSystem(
   );
 }
 
-export async function loadPublicSystemById(systemId: string): Promise<PublicSystem | null> {
-  const client = await createAuthenticatedClient();
-
-  try {
-    const [{ data: record }, detailsMap] = await Promise.all([
-      client.get<BeszelSystemRecord>(`/api/collections/systems/records/${systemId}`),
-      fetchSystemDetailsMap(client),
-    ]);
-    return buildPublicSystem(client, record, detailsMap);
-  } catch {
-    return null;
-  }
-}
-
 export async function fetchDashboardData(): Promise<PublicSystem[]> {
   const client = await createAuthenticatedClient();
 
@@ -678,12 +773,6 @@ function ratesFromInfo(info?: BeszelSystemInfo): IoRates | undefined {
   return mergeIoRates(undefined, parseIoRates({ b: payload.b, dio: payload.dio }), info);
 }
 
-function pushHistory(values: number[], value: number) {
-  const next = [...values, value];
-  if (next.length > HISTORY_POINTS) next.shift();
-  return next;
-}
-
 export function applyRtMetrics(
   existing: PublicSystem,
   data: RtMetricsPayload,
@@ -735,18 +824,11 @@ export function applySystemStat(
     existing.info as BeszelSystemInfo | undefined,
     stats,
   );
+  const created = record.created ?? new Date().toISOString();
 
   return {
     ...existing,
-    history: {
-      cpu: pushHistory(existing.history.cpu, stats.cpu ?? 0),
-      mem: pushHistory(existing.history.mem, stats.mp ?? 0),
-      swap: pushHistory(existing.history.swap, swapPct(stats)),
-      diskRead: pushHistory(existing.history.diskRead, diskReadMb(stats)),
-      diskWrite: pushHistory(existing.history.diskWrite, diskWriteMb(stats)),
-      netSent: pushHistory(existing.history.netSent, netSentMb(stats)),
-      netRecv: pushHistory(existing.history.netRecv, netRecvMb(stats)),
-    },
+    history: appendStatToHistory(existing.history, created, stats),
     network: parseNetworkTotals(stats) ?? existing.network,
     rates: mergeIoRates(existing.rates, parseIoRates(stats), mergedInfo) ?? existing.rates,
     live: parseLiveStats(stats) ?? existing.live,

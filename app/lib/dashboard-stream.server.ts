@@ -2,8 +2,8 @@ import type { DashboardData } from "~/lib/dashboard";
 import {
   applyDashboardEvent,
   ensureDashboardCache,
-  enrichSystemInCache,
   hasCachedSystem,
+  mergeSystemHistoryInCache,
   refreshDashboardCache,
 } from "~/lib/dashboard-cache.server";
 import { subscribeBeszelChanges, setBeszelSystemIds } from "~/lib/beszel-realtime.server";
@@ -13,24 +13,20 @@ type StreamClient = {
   close: () => void;
 };
 
-const BROADCAST_MS = 150;
-
 const clients = new Set<StreamClient>();
 let lastData: DashboardData | null = null;
-let pendingBroadcast: DashboardData | null = null;
-let broadcastTimer: ReturnType<typeof setTimeout> | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let unsubscribeBeszel: (() => void) | null = null;
 let refreshPromise: Promise<void> | null = null;
 let hubStarting: Promise<void> | null = null;
 let refreshGeneration = 0;
-const pendingEnrich = new Set<string>();
+const pendingHistory = new Set<string>();
 
 function encodeEvent(data: DashboardData) {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
-function flushBroadcast(data: DashboardData) {
+function broadcast(data: DashboardData) {
   lastData = data;
   const chunk = encodeEvent(data);
   for (const client of clients) {
@@ -40,29 +36,6 @@ function flushBroadcast(data: DashboardData) {
       clients.delete(client);
     }
   }
-}
-
-function broadcast(data: DashboardData, immediate = false) {
-  if (immediate) {
-    if (broadcastTimer) {
-      clearTimeout(broadcastTimer);
-      broadcastTimer = null;
-    }
-    pendingBroadcast = null;
-    flushBroadcast(data);
-    return;
-  }
-
-  pendingBroadcast = data;
-  if (broadcastTimer) return;
-
-  broadcastTimer = setTimeout(() => {
-    broadcastTimer = null;
-    if (!pendingBroadcast) return;
-    const next = pendingBroadcast;
-    pendingBroadcast = null;
-    flushBroadcast(next);
-  }, BROADCAST_MS);
 }
 
 function syncSystemSubscriptions(data: DashboardData) {
@@ -82,7 +55,7 @@ async function fullRefresh() {
     .then((data) => {
       if (generation !== refreshGeneration) return;
       syncSystemSubscriptions(data);
-      broadcast(data, true);
+      broadcast(data);
     })
     .finally(() => {
       refreshPromise = null;
@@ -101,29 +74,27 @@ function shouldInvalidateRefresh(
   return event.action === "update" && !existedBefore;
 }
 
-async function enrichSystemAndBroadcast(systemId: string) {
-  const data = await enrichSystemInCache(systemId);
-  if (!data) return;
-  broadcast(data, true);
-}
-
-function scheduleEnrich(systemId: string) {
-  if (pendingEnrich.has(systemId)) return;
-  pendingEnrich.add(systemId);
-  void enrichSystemAndBroadcast(systemId).finally(() => {
-    pendingEnrich.delete(systemId);
-  });
+function scheduleHistoryLoad(systemId: string) {
+  if (pendingHistory.has(systemId)) return;
+  pendingHistory.add(systemId);
+  void mergeSystemHistoryInCache(systemId)
+    .then((data) => {
+      if (!data) return;
+      broadcast(data);
+    })
+    .finally(() => {
+      pendingHistory.delete(systemId);
+    });
 }
 
 function handleBeszelEvent(event: Parameters<typeof applyDashboardEvent>[0]) {
   const isSystems =
     event.kind === "collection" && event.collection === "systems";
-  const systemId =
-    isSystems ? String(event.record.id ?? "") : "";
+  const systemId = isSystems ? String(event.record.id ?? "") : "";
   const existedBefore = systemId !== "" && hasCachedSystem(systemId);
 
   if (isSystems && event.action === "delete" && systemId) {
-    pendingEnrich.delete(systemId);
+    pendingHistory.delete(systemId);
   }
 
   if (shouldInvalidateRefresh(event, existedBefore)) {
@@ -134,14 +105,14 @@ function handleBeszelEvent(event: Parameters<typeof applyDashboardEvent>[0]) {
   if (updated) {
     if (isSystems) {
       syncSystemSubscriptions(updated);
-      broadcast(updated, true);
+      broadcast(updated);
       if (event.action !== "delete" && systemId && !existedBefore) {
-        scheduleEnrich(systemId);
+        scheduleHistoryLoad(systemId);
       }
       return;
     }
 
-    broadcast(updated, event.kind === "rt_metrics");
+    broadcast(updated);
     return;
   }
 
@@ -155,7 +126,7 @@ function startHub() {
     try {
       const data = await ensureDashboardCache();
       syncSystemSubscriptions(data);
-      broadcast(data, true);
+      broadcast(data);
       unsubscribeBeszel = subscribeBeszelChanges(handleBeszelEvent);
     } finally {
       hubStarting = null;
@@ -181,10 +152,6 @@ function stopHub() {
 
   if (pingTimer) clearInterval(pingTimer);
   pingTimer = null;
-
-  if (broadcastTimer) clearTimeout(broadcastTimer);
-  broadcastTimer = null;
-  pendingBroadcast = null;
 }
 
 export function subscribeDashboardStream(request: Request) {

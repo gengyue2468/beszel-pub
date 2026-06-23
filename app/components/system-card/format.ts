@@ -1,4 +1,12 @@
-import type { PublicSystem } from "~/lib/beszel.server";
+import type { HistoryValue, PublicSystem } from "~/lib/beszel.server";
+
+function lastHistoryValue(values: HistoryValue[]) {
+  for (let i = values.length - 1; i >= 0; i--) {
+    const v = values[i];
+    if (v != null) return v;
+  }
+  return undefined;
+}
 
 export function formatUptime(seconds?: number) {
   if (!seconds) return "-";
@@ -20,12 +28,18 @@ export function formatLoad(info?: PublicSystem["info"]) {
   return la.map((n) => n.toFixed(2)).join(", ");
 }
 
+const GB_BYTES = 1024 ** 3;
+
 export function formatBytes(bytes: number) {
   if (bytes === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** i;
   return `${value.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+export function formatFromGb(gb: number) {
+  return formatBytes(gb * GB_BYTES);
 }
 
 export function formatMbPerSecond(mb?: number) {
@@ -57,13 +71,10 @@ export function formatLastSeen(updated: string, now: Date) {
 
 function resolveDiskRates(system: PublicSystem) {
   const { diskRead, diskWrite } = system.history;
-  const i = diskRead.length - 1;
-  const histRead = i >= 0 ? diskRead[i] : undefined;
-  const histWrite = i >= 0 ? diskWrite[i] : undefined;
 
   return {
-    read: system.rates?.diskRead ?? histRead,
-    write: system.rates?.diskWrite ?? histWrite,
+    read: system.rates?.diskRead ?? lastHistoryValue(diskRead),
+    write: system.rates?.diskWrite ?? lastHistoryValue(diskWrite),
   };
 }
 
@@ -89,10 +100,9 @@ export function formatPct(value: number) {
 
 function resolveNetRates(system: PublicSystem) {
   const { netSent, netRecv } = system.history;
-  const i = netSent.length - 1;
   return {
-    sent: system.rates?.netSent ?? (i >= 0 ? netSent[i] : undefined),
-    recv: system.rates?.netRecv ?? (i >= 0 ? netRecv[i] : undefined),
+    sent: system.rates?.netSent ?? lastHistoryValue(netSent),
+    recv: system.rates?.netRecv ?? lastHistoryValue(netRecv),
   };
 }
 
@@ -112,14 +122,10 @@ export function formatNetUsed(system: PublicSystem) {
   return formatMbPerSecond(sent);
 }
 
-export function formatGb(gb: number) {
-  return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`;
-}
-
 export function formatMemoryTotal(system: PublicSystem) {
   const { spec, live } = system;
   if (spec?.memoryBytes) return formatBytes(spec.memoryBytes);
-  if (live?.memTotalGb != null) return formatGb(live.memTotalGb);
+  if (live?.memTotalGb != null) return formatFromGb(live.memTotalGb);
   return null;
 }
 
@@ -129,7 +135,7 @@ export function formatRamPct(system: PublicSystem) {
 }
 
 export function formatRamUsedGb(system: PublicSystem) {
-  if (system.live?.memUsedGb != null) return formatGb(system.live.memUsedGb);
+  if (system.live?.memUsedGb != null) return formatFromGb(system.live.memUsedGb);
   return "-";
 }
 
@@ -158,7 +164,7 @@ export function formatRamTooltip(pct: number, system: PublicSystem) {
   const totalGb = system.live?.memTotalGb;
   if (totalGb != null) {
     const usedGb = (pct / 100) * totalGb;
-    return `${formatGb(usedGb)} / ${formatGb(totalGb)}`;
+    return `${formatFromGb(usedGb)} / ${formatFromGb(totalGb)}`;
   }
   const total = formatMemoryTotal(system);
   if (total) return `${pct.toFixed(1)}% / ${total}`;
@@ -175,7 +181,7 @@ export function formatDiskValue(system: PublicSystem) {
   const used = system.live?.diskUsedGb;
   const total = system.live?.diskTotalGb;
   if (pct && used != null && total != null) {
-    return `${pct} (${formatGb(used)}/${formatGb(total)})`;
+    return `${pct} (${formatFromGb(used)}/${formatFromGb(total)})`;
   }
   return pct ?? "-";
 }

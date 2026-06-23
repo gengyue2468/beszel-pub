@@ -10,6 +10,7 @@ export function ChartMetric({
   total,
   data,
   series,
+  times,
   colorClass,
   fill,
   caption,
@@ -20,8 +21,9 @@ export function ChartMetric({
   label: string;
   used: string;
   total: string;
-  data?: number[];
+  data?: (number | null)[];
   series?: SparklineSeries[];
+  times?: string[];
   colorClass?: string;
   fill?: string;
   caption?: string | null;
@@ -33,6 +35,7 @@ export function ChartMetric({
     <Sparkline
       data={data}
       series={series}
+      times={times}
       className={colorClass}
       fill={fill}
       valueFormatter={tooltipFormatter}

@@ -4,7 +4,7 @@ import {
   applySystemStat,
   applyRtMetrics,
   dashboardFromSystems,
-  loadPublicSystemById,
+  loadSystemHistoryBundle,
   publicSystemFromRecord,
   type BeszelRealtimeEvent,
   type BeszelSystemRecord,
@@ -54,13 +54,22 @@ export async function refreshDashboardCache(): Promise<DashboardData> {
   return data;
 }
 
-export async function enrichSystemInCache(systemId: string): Promise<DashboardData | null> {
+export async function mergeSystemHistoryInCache(
+  systemId: string,
+): Promise<DashboardData | null> {
   if (!ready || !systems.has(systemId)) return null;
 
-  const full = await loadPublicSystemById(systemId);
-  if (!full || !systems.has(systemId)) return null;
+  const bundle = await loadSystemHistoryBundle(systemId);
+  if (!systems.has(systemId)) return null;
 
-  systems.set(systemId, full);
+  const existing = systems.get(systemId)!;
+  systems.set(systemId, {
+    ...existing,
+    history: bundle.history,
+    network: bundle.network ?? existing.network,
+    rates: bundle.rates ?? existing.rates,
+    live: bundle.live ?? existing.live,
+  });
   return dashboardFromSystems([...systems.values()]);
 }
 

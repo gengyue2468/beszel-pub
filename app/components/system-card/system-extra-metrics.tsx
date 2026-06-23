@@ -1,6 +1,6 @@
 import { Metric } from "~/components/metric";
 import type { PublicSystem } from "~/lib/beszel.server";
-import { formatBytes, formatDiskValue, formatGb, formatUptime } from "./format";
+import { formatBytes, formatDiskValue, formatFromGb, formatUptime } from "./format";
 
 export function SystemExtraMetrics({
   system,
@@ -39,8 +39,8 @@ export function SystemExtraMetrics({
               label="SWAP"
               value={
                 system.live.swapUsedGb != null
-                  ? `${formatGb(system.live.swapUsedGb)}/${formatGb(system.live.swapTotalGb)}`
-                  : formatGb(system.live.swapTotalGb)
+                  ? `${formatFromGb(system.live.swapUsedGb)}/${formatFromGb(system.live.swapTotalGb)}`
+                  : formatFromGb(system.live.swapTotalGb)
               }
             />
           )}
