@@ -23,7 +23,7 @@ export function ChartMetric({
   total: string;
   data?: (number | null)[];
   series?: SparklineSeries[];
-  times?: string[];
+  times?: (string | undefined)[];
   colorClass?: string;
   fill?: string;
   caption?: string | null;

@@ -1,7 +1,15 @@
 import type { AxiosInstance } from "axios";
 import type { DashboardData } from "~/lib/dashboard";
+import {
+  appendStatSample,
+  chartFromStatRecords,
+  pbTimestamp,
+  type ChartSample,
+} from "~/lib/chart-samples";
 import { loadEnvFile } from "~/lib/env.server";
 import { createHttpClient, HttpError, setAuthToken } from "~/lib/http.server";
+
+export type { ChartSample };
 
 loadEnvFile();
 
@@ -39,7 +47,7 @@ export interface BeszelSystemInfo {
   bb?: [number, number];
 }
 
-interface SystemStatsPayload {
+export interface SystemStatsPayload {
   cpu?: number;
   mp?: number;
   m?: number;
@@ -134,19 +142,6 @@ export interface IoRates {
   netRecv?: number;
 }
 
-export type HistoryValue = number | null;
-
-export interface SystemHistory {
-  times: string[];
-  cpu: HistoryValue[];
-  mem: HistoryValue[];
-  swap: HistoryValue[];
-  diskRead: HistoryValue[];
-  diskWrite: HistoryValue[];
-  netSent: HistoryValue[];
-  netRecv: HistoryValue[];
-}
-
 interface SystemDetailsRecord {
   id: string;
   system: string;
@@ -177,7 +172,7 @@ export interface PublicSystem {
   live?: SystemLiveStats;
   info?: PublicSystemInfo;
   updated: string;
-  history: SystemHistory;
+  chart: ChartSample[];
   network?: NetworkTotals;
   rates?: IoRates;
 }
@@ -190,127 +185,8 @@ interface AuthResponse {
   token: string;
 }
 
-const HISTORY_POINTS = 20;
-const STAT_INTERVAL_MS = 60_000;
-const GAP_THRESHOLD_MS = STAT_INTERVAL_MS * 1.5;
+const CHART_LOOKBACK_MS = 60 * 60 * 1000;
 const OS_NAMES = ["Linux", "macOS", "Windows", "FreeBSD"];
-
-export const EMPTY_HISTORY: SystemHistory = {
-  times: [],
-  cpu: [],
-  mem: [],
-  swap: [],
-  diskRead: [],
-  diskWrite: [],
-  netSent: [],
-  netRecv: [],
-};
-
-function historyValuesFromStats(stats?: SystemStatsPayload) {
-  return {
-    cpu: stats?.cpu ?? null,
-    mem: stats?.mp ?? null,
-    swap: stats ? swapPct(stats) : null,
-    diskRead: stats ? diskReadMb(stats) : null,
-    diskWrite: stats ? diskWriteMb(stats) : null,
-    netSent: stats ? netSentMb(stats) : null,
-    netRecv: stats ? netRecvMb(stats) : null,
-  };
-}
-
-function appendGapPoint(history: SystemHistory, gapTime: string): SystemHistory {
-  return {
-    times: [...history.times, gapTime],
-    cpu: [...history.cpu, null],
-    mem: [...history.mem, null],
-    swap: [...history.swap, null],
-    diskRead: [...history.diskRead, null],
-    diskWrite: [...history.diskWrite, null],
-    netSent: [...history.netSent, null],
-    netRecv: [...history.netRecv, null],
-  };
-}
-
-function trimHistory(history: SystemHistory): SystemHistory {
-  if (history.times.length <= HISTORY_POINTS) return history;
-  const trim = history.times.length - HISTORY_POINTS;
-  return {
-    times: history.times.slice(trim),
-    cpu: history.cpu.slice(trim),
-    mem: history.mem.slice(trim),
-    swap: history.swap.slice(trim),
-    diskRead: history.diskRead.slice(trim),
-    diskWrite: history.diskWrite.slice(trim),
-    netSent: history.netSent.slice(trim),
-    netRecv: history.netRecv.slice(trim),
-  };
-}
-
-function buildHistoryFromStatRecords(items: SystemStatRecord[]): SystemHistory {
-  let history = EMPTY_HISTORY;
-
-  for (const item of items) {
-    const created = item.created;
-    if (!created) continue;
-
-    if (history.times.length > 0) {
-      const lastTime = history.times[history.times.length - 1]!;
-      const gapMs = new Date(created).getTime() - new Date(lastTime).getTime();
-      if (gapMs > GAP_THRESHOLD_MS) {
-        history = appendGapPoint(
-          history,
-          new Date(new Date(lastTime).getTime() + STAT_INTERVAL_MS).toISOString(),
-        );
-      }
-    }
-
-    const values = historyValuesFromStats(item.stats);
-    history = {
-      times: [...history.times, created],
-      cpu: [...history.cpu, values.cpu],
-      mem: [...history.mem, values.mem],
-      swap: [...history.swap, values.swap],
-      diskRead: [...history.diskRead, values.diskRead],
-      diskWrite: [...history.diskWrite, values.diskWrite],
-      netSent: [...history.netSent, values.netSent],
-      netRecv: [...history.netRecv, values.netRecv],
-    };
-  }
-
-  return trimHistory(history);
-}
-
-function appendStatToHistory(
-  history: SystemHistory,
-  created: string,
-  stats: SystemStatsPayload,
-): SystemHistory {
-  const lastTime = history.times[history.times.length - 1];
-  if (lastTime === created) return history;
-
-  let next = history;
-  if (lastTime) {
-    const gapMs = new Date(created).getTime() - new Date(lastTime).getTime();
-    if (gapMs > GAP_THRESHOLD_MS) {
-      next = appendGapPoint(
-        next,
-        new Date(new Date(lastTime).getTime() + STAT_INTERVAL_MS).toISOString(),
-      );
-    }
-  }
-
-  const values = historyValuesFromStats(stats);
-  return trimHistory({
-    times: [...next.times, created],
-    cpu: [...next.cpu, values.cpu],
-    mem: [...next.mem, values.mem],
-    swap: [...next.swap, values.swap],
-    diskRead: [...next.diskRead, values.diskRead],
-    diskWrite: [...next.diskWrite, values.diskWrite],
-    netSent: [...next.netSent, values.netSent],
-    netRecv: [...next.netRecv, values.netRecv],
-  });
-}
 
 function swapPct(stats?: SystemStatsPayload) {
   if (!stats?.s) return 0;
@@ -573,45 +449,39 @@ export async function loadSystemProfiles(): Promise<SystemProfile[]> {
   }
 }
 
-async function fetchSystemHistory(
-  client: AxiosInstance,
-  systemId: string,
-): Promise<{
-  history: SystemHistory;
-  network?: NetworkTotals;
-  rates?: IoRates;
-  loadStats?: SystemStatsPayload;
-  live?: SystemLiveStats;
-}> {
+async function fetchSystemChart(client: AxiosInstance, systemId: string) {
+  const since = pbTimestamp(Date.now() - CHART_LOOKBACK_MS);
+
   try {
     const { data } = await client.get<PocketBaseListResponse<SystemStatRecord>>(
       "/api/collections/system_stats/records",
       {
         params: {
-          filter: `system="${systemId}" && type="1m"`,
-          sort: "-created",
-          perPage: HISTORY_POINTS,
+          filter: `system="${systemId}" && type="1m" && created > "${since}"`,
+          sort: "created",
+          fields: "created,stats",
+          perPage: 100,
         },
       },
     );
-    const items = [...data.items].reverse();
-    const latest = data.items[0]?.stats;
+
+    const latest = data.items.at(-1)?.stats;
 
     return {
-      history: buildHistoryFromStatRecords(items),
+      chart: chartFromStatRecords(data.items),
       network: parseNetworkTotals(latest),
       rates: parseIoRates(latest),
       loadStats: latest,
       live: parseLiveStats(latest),
     };
   } catch {
-    return { history: EMPTY_HISTORY };
+    return { chart: [] as ChartSample[] };
   }
 }
 
-export async function loadSystemHistoryBundle(systemId: string) {
+export async function loadSystemChart(systemId: string) {
   const client = await createAuthenticatedClient();
-  return fetchSystemHistory(client, systemId);
+  return fetchSystemChart(client, systemId);
 }
 
 function parseLiveStats(stats?: SystemStatsPayload): SystemLiveStats | undefined {
@@ -672,7 +542,7 @@ export function publicSystemFromRecord(record: BeszelSystemRecord): PublicSystem
   return toPublicSystem(
     record,
     record.info,
-    EMPTY_HISTORY,
+    [],
     osFromInfo(record.info),
     specFromInfo(record.info),
     undefined,
@@ -687,7 +557,7 @@ async function buildPublicSystem(
   detailsMap: Map<string, SystemDetailsRecord>,
 ): Promise<PublicSystem> {
   const details = detailsMap.get(record.id);
-  const { history, network, rates, loadStats, live } = await fetchSystemHistory(
+  const { chart, network, rates, loadStats, live } = await fetchSystemChart(
     client,
     record.id,
   );
@@ -695,13 +565,17 @@ async function buildPublicSystem(
   return toPublicSystem(
     record,
     info,
-    history,
+    chart,
     details?.os_name ?? osFromInfo(record.info),
     specFromDetails(record.info, details),
     live,
     network,
     mergeIoRates(undefined, rates, info),
   );
+}
+
+export async function fetchSystemsList(): Promise<PublicSystem[]> {
+  return fetchDashboardData();
 }
 
 export async function fetchDashboardData(): Promise<PublicSystem[]> {
@@ -745,7 +619,7 @@ function sanitizePublicInfo(info?: BeszelSystemInfo): PublicSystemInfo | undefin
 function toPublicSystem(
   record: BeszelSystemRecord,
   mergedInfo: BeszelSystemInfo | undefined,
-  history: SystemHistory,
+  chart: ChartSample[],
   os?: string,
   spec?: SystemSpec,
   live?: SystemLiveStats,
@@ -761,7 +635,7 @@ function toPublicSystem(
     live,
     info: sanitizePublicInfo(mergedInfo),
     updated: record.updated,
-    history,
+    chart,
     network,
     rates,
   };
@@ -818,17 +692,16 @@ export function applySystemStat(
 ): PublicSystem | null {
   if (record.type && record.type !== "1m") return null;
   const stats = record.stats;
-  if (!stats) return null;
+  if (!stats || !record.created) return null;
 
   const mergedInfo = mergeLoadInfo(
     existing.info as BeszelSystemInfo | undefined,
     stats,
   );
-  const created = record.created ?? new Date().toISOString();
 
   return {
     ...existing,
-    history: appendStatToHistory(existing.history, created, stats),
+    chart: appendStatSample(existing.chart, record.created, stats),
     network: parseNetworkTotals(stats) ?? existing.network,
     rates: mergeIoRates(existing.rates, parseIoRates(stats), mergedInfo) ?? existing.rates,
     live: parseLiveStats(stats) ?? existing.live,

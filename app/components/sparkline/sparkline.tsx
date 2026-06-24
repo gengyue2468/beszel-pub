@@ -29,7 +29,7 @@ function numericValues(values: (number | null | undefined)[]) {
   return values.filter((v): v is number => v != null);
 }
 
-function timelineAt(times: string[] | undefined, index: number) {
+function timelineAt(times: (string | undefined)[] | undefined, index: number) {
   return times?.[index];
 }
 
@@ -105,7 +105,7 @@ export function Sparkline({
 }: {
   data?: (number | null)[];
   series?: SparklineSeries[];
-  times?: string[];
+  times?: (string | undefined)[];
   className?: string;
   fill?: string;
   valueFormatter?: (value: number) => string;

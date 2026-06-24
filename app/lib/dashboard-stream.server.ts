@@ -1,11 +1,11 @@
 import type { DashboardData } from "~/lib/dashboard";
 import {
-  applyDashboardEvent,
-  ensureDashboardCache,
-  hasCachedSystem,
-  mergeSystemHistoryInCache,
-  refreshDashboardCache,
-} from "~/lib/dashboard-cache.server";
+  applyEvent,
+  hasSystem,
+  initDashboardState,
+  loadChartForSystem,
+  reloadDashboardState,
+} from "~/lib/dashboard-state.server";
 import { subscribeBeszelChanges, setBeszelSystemIds } from "~/lib/beszel-realtime.server";
 
 type StreamClient = {
@@ -17,10 +17,10 @@ const clients = new Set<StreamClient>();
 let lastData: DashboardData | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let unsubscribeBeszel: (() => void) | null = null;
-let refreshPromise: Promise<void> | null = null;
 let hubStarting: Promise<void> | null = null;
-let refreshGeneration = 0;
-const pendingHistory = new Set<string>();
+let reloadPromise: Promise<void> | null = null;
+let reloadGeneration = 0;
+const pendingCharts = new Set<string>();
 
 function encodeEvent(data: DashboardData) {
   return `data: ${JSON.stringify(data)}\n\n`;
@@ -38,85 +38,76 @@ function broadcast(data: DashboardData) {
   }
 }
 
-function syncSystemSubscriptions(data: DashboardData) {
+function syncSubscriptions(data: DashboardData) {
   setBeszelSystemIds(data.systems.map((system) => system.id));
 }
 
-function invalidatePendingRefresh() {
-  refreshGeneration++;
+function invalidateReload() {
+  reloadGeneration++;
 }
 
-async function fullRefresh() {
-  if (refreshPromise) return refreshPromise;
+async function reloadAll() {
+  if (reloadPromise) return reloadPromise;
 
-  const generation = refreshGeneration;
-
-  refreshPromise = refreshDashboardCache()
+  const generation = reloadGeneration;
+  reloadPromise = reloadDashboardState()
     .then((data) => {
-      if (generation !== refreshGeneration) return;
-      syncSystemSubscriptions(data);
+      if (generation !== reloadGeneration) return;
+      syncSubscriptions(data);
       broadcast(data);
     })
     .finally(() => {
-      refreshPromise = null;
+      reloadPromise = null;
     });
 
-  return refreshPromise;
+  return reloadPromise;
 }
 
-function shouldInvalidateRefresh(
-  event: Parameters<typeof applyDashboardEvent>[0],
-  existedBefore: boolean,
-) {
-  if (event.kind !== "collection" || event.collection !== "systems") return false;
-  if (event.action === "delete") return true;
-  if (event.action === "create") return !existedBefore;
-  return event.action === "update" && !existedBefore;
-}
-
-function scheduleHistoryLoad(systemId: string) {
-  if (pendingHistory.has(systemId)) return;
-  pendingHistory.add(systemId);
-  void mergeSystemHistoryInCache(systemId)
+function scheduleChartLoad(systemId: string) {
+  if (pendingCharts.has(systemId)) return;
+  pendingCharts.add(systemId);
+  void loadChartForSystem(systemId)
     .then((data) => {
-      if (!data) return;
-      broadcast(data);
+      if (data) broadcast(data);
     })
     .finally(() => {
-      pendingHistory.delete(systemId);
+      pendingCharts.delete(systemId);
     });
 }
 
-function handleBeszelEvent(event: Parameters<typeof applyDashboardEvent>[0]) {
-  const isSystems =
-    event.kind === "collection" && event.collection === "systems";
+function handleEvent(event: Parameters<typeof applyEvent>[0]) {
+  const isSystems = event.kind === "collection" && event.collection === "systems";
   const systemId = isSystems ? String(event.record.id ?? "") : "";
-  const existedBefore = systemId !== "" && hasCachedSystem(systemId);
+  const existed = systemId !== "" && hasSystem(systemId);
 
   if (isSystems && event.action === "delete" && systemId) {
-    pendingHistory.delete(systemId);
+    pendingCharts.delete(systemId);
   }
 
-  if (shouldInvalidateRefresh(event, existedBefore)) {
-    invalidatePendingRefresh();
+  if (
+    isSystems &&
+    (event.action === "delete" ||
+      (event.action === "create" && !existed) ||
+      (event.action === "update" && !existed))
+  ) {
+    invalidateReload();
   }
 
-  const updated = applyDashboardEvent(event);
+  const updated = applyEvent(event);
   if (updated) {
     if (isSystems) {
-      syncSystemSubscriptions(updated);
+      syncSubscriptions(updated);
       broadcast(updated);
-      if (event.action !== "delete" && systemId && !existedBefore) {
-        scheduleHistoryLoad(systemId);
+      if (event.action !== "delete" && systemId && !existed) {
+        scheduleChartLoad(systemId);
       }
       return;
     }
-
     broadcast(updated);
     return;
   }
 
-  if (isSystems) void fullRefresh();
+  if (isSystems) void reloadAll();
 }
 
 function startHub() {
@@ -124,10 +115,10 @@ function startHub() {
 
   hubStarting = (async () => {
     try {
-      const data = await ensureDashboardCache();
-      syncSystemSubscriptions(data);
+      const data = await initDashboardState();
+      syncSubscriptions(data);
       broadcast(data);
-      unsubscribeBeszel = subscribeBeszelChanges(handleBeszelEvent);
+      unsubscribeBeszel = subscribeBeszelChanges(handleEvent);
     } finally {
       hubStarting = null;
     }
@@ -146,10 +137,8 @@ function startHub() {
 
 function stopHub() {
   if (clients.size > 0) return;
-
   unsubscribeBeszel?.();
   unsubscribeBeszel = null;
-
   if (pingTimer) clearInterval(pingTimer);
   pingTimer = null;
 }

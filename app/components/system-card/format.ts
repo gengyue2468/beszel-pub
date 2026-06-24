@@ -1,9 +1,9 @@
-import type { HistoryValue, PublicSystem } from "~/lib/beszel.server";
+import type { PublicSystem } from "~/lib/beszel.server";
 
-function lastHistoryValue(values: HistoryValue[]) {
-  for (let i = values.length - 1; i >= 0; i--) {
-    const v = values[i];
-    if (v != null) return v;
+function latestChartStats(system: PublicSystem) {
+  for (let i = system.chart.length - 1; i >= 0; i--) {
+    const stats = system.chart[i]?.stats;
+    if (stats) return stats;
   }
   return undefined;
 }
@@ -70,12 +70,21 @@ export function formatLastSeen(updated: string, now: Date) {
 }
 
 function resolveDiskRates(system: PublicSystem) {
-  const { diskRead, diskWrite } = system.history;
-
+  const stats = latestChartStats(system);
   return {
-    read: system.rates?.diskRead ?? lastHistoryValue(diskRead),
-    write: system.rates?.diskWrite ?? lastHistoryValue(diskWrite),
+    read: system.rates?.diskRead ?? (stats ? diskReadFromStats(stats) : undefined),
+    write: system.rates?.diskWrite ?? (stats ? diskWriteFromStats(stats) : undefined),
   };
+}
+
+function diskReadFromStats(stats: NonNullable<ReturnType<typeof latestChartStats>>) {
+  if (stats.dio != null) return (stats.dio[0] ?? 0) / 1024 / 1024;
+  return stats.dr;
+}
+
+function diskWriteFromStats(stats: NonNullable<ReturnType<typeof latestChartStats>>) {
+  if (stats.dio != null) return (stats.dio[1] ?? 0) / 1024 / 1024;
+  return stats.dw;
 }
 
 export function formatDiskIoRead(system: PublicSystem) {
@@ -99,10 +108,17 @@ export function formatPct(value: number) {
 }
 
 function resolveNetRates(system: PublicSystem) {
-  const { netSent, netRecv } = system.history;
+  const stats = latestChartStats(system);
+  const netSent = stats?.b?.[0] != null
+    ? (stats.b[0] ?? 0) / 1024 / 1024
+    : stats?.ns;
+  const netRecv = stats?.b?.[1] != null
+    ? (stats.b[1] ?? 0) / 1024 / 1024
+    : stats?.nr;
+
   return {
-    sent: system.rates?.netSent ?? lastHistoryValue(netSent),
-    recv: system.rates?.netRecv ?? lastHistoryValue(netRecv),
+    sent: system.rates?.netSent ?? netSent,
+    recv: system.rates?.netRecv ?? netRecv,
   };
 }
 

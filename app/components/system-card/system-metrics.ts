@@ -1,5 +1,6 @@
 import type { PublicSystem } from "~/lib/beszel.server";
 import type { SparklineSeries } from "~/components/sparkline";
+import { chartMetricsFromSystem } from "~/lib/chart-metrics";
 import {
   formatBytes,
   formatCpuCaption,
@@ -32,7 +33,7 @@ export type ChartMetricConfig = {
   total: string;
   data?: (number | null)[];
   series?: SparklineSeries[];
-  times?: string[];
+  times?: (string | undefined)[];
   colorClass?: string;
   fill?: string;
   caption?: string | null;
@@ -40,63 +41,64 @@ export type ChartMetricConfig = {
   listFooter?: ListFooterItem[];
 };
 
-const RAM_SERIES = (system: PublicSystem): SparklineSeries[] => [
-  {
-    key: "mem",
-    data: system.history.mem,
-    color: "var(--chart-blue)",
-    fill: "var(--chart-blue-fill)",
-    label: "mem",
-  },
-  {
-    key: "swap",
-    data: system.history.swap,
-    color: "var(--chart-violet)",
-    fill: "var(--chart-violet-fill)",
-    label: "swap",
-  },
-];
-
-const DISK_IO_SERIES = (system: PublicSystem): SparklineSeries[] => [
-  {
-    key: "read",
-    data: system.history.diskRead,
-    color: "var(--chart-cyan)",
-    fill: "var(--chart-cyan-fill)",
-    label: "read",
-  },
-  {
-    key: "write",
-    data: system.history.diskWrite,
-    color: "var(--chart-amber)",
-    fill: "var(--chart-amber-fill)",
-    label: "write",
-  },
-];
-
-const NET_SERIES = (system: PublicSystem): SparklineSeries[] => [
-  {
-    key: "sent",
-    data: system.history.netSent,
-    color: "var(--chart-amber)",
-    fill: "var(--chart-amber-fill)",
-    label: "↑",
-  },
-  {
-    key: "recv",
-    data: system.history.netRecv,
-    color: "var(--chart-green)",
-    fill: "var(--chart-green-fill)",
-    label: "↓",
-  },
-];
-
 export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[] {
   const info = system.info;
   const services = info?.sv;
   const ramUsed = formatRamUsedGb(system);
   const ramTotal = formatRamTotal(system);
-  const times = system.history.times;
+  const metrics = chartMetricsFromSystem(system);
+  const { times, cpu, mem, swap, diskRead, diskWrite, netSent, netRecv } = metrics;
+
+  const ramSeries: SparklineSeries[] = [
+    {
+      key: "mem",
+      data: mem,
+      color: "var(--chart-blue)",
+      fill: "var(--chart-blue-fill)",
+      label: "mem",
+    },
+    {
+      key: "swap",
+      data: swap,
+      color: "var(--chart-violet)",
+      fill: "var(--chart-violet-fill)",
+      label: "swap",
+    },
+  ];
+
+  const diskSeries: SparklineSeries[] = [
+    {
+      key: "read",
+      data: diskRead,
+      color: "var(--chart-cyan)",
+      fill: "var(--chart-cyan-fill)",
+      label: "read",
+    },
+    {
+      key: "write",
+      data: diskWrite,
+      color: "var(--chart-amber)",
+      fill: "var(--chart-amber-fill)",
+      label: "write",
+    },
+  ];
+
+  const netSeries: SparklineSeries[] = [
+    {
+      key: "sent",
+      data: netSent,
+      color: "var(--chart-amber)",
+      fill: "var(--chart-amber-fill)",
+      label: "↑",
+    },
+    {
+      key: "recv",
+      data: netRecv,
+      color: "var(--chart-green)",
+      fill: "var(--chart-green-fill)",
+      label: "↓",
+    },
+  ];
 
   return [
     {
@@ -104,7 +106,7 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       label: "CPU",
       used: formatCpuUsed(system),
       total: formatCpuTotal(system),
-      data: system.history.cpu,
+      data: cpu,
       times,
       colorClass: "text-chart-blue",
       fill: "var(--chart-blue-fill)",
@@ -128,7 +130,7 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       label: "RAM",
       used: formatRamPct(system),
       total: formatRamTotal(system),
-      series: RAM_SERIES(system),
+      series: ramSeries,
       times,
       caption: formatRamUsedGb(system),
       tooltipFormatter: formatPct,
@@ -139,7 +141,7 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       label: "DISK I/O",
       used: formatDiskIoUsed(system),
       total: formatDiskIoWrite(system),
-      series: DISK_IO_SERIES(system),
+      series: diskSeries,
       times,
       caption: formatDiskIoRead(system),
       tooltipFormatter: formatIoTooltip,
@@ -153,7 +155,7 @@ export function getSystemChartMetrics(system: PublicSystem): ChartMetricConfig[]
       label: "NET",
       used: formatNetUsed(system),
       total: formatNetRecv(system),
-      series: NET_SERIES(system),
+      series: netSeries,
       times,
       caption: formatNetSent(system),
       tooltipFormatter: formatIoTooltip,
