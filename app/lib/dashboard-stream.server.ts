@@ -1,12 +1,16 @@
 import type { DashboardData } from "~/lib/dashboard";
+import { chartNeedsReload } from "~/lib/chart-samples";
 import {
   applyEvent,
+  getSystem,
   hasSystem,
   initDashboardState,
+  isDashboardReady,
   loadChartForSystem,
   reloadDashboardState,
 } from "~/lib/dashboard-state.server";
 import { subscribeBeszelChanges, setBeszelSystemIds } from "~/lib/beszel-realtime.server";
+import type { SystemStatPbRecord } from "~/lib/beszel.server";
 
 type StreamClient = {
   push: (chunk: string) => void;
@@ -77,6 +81,7 @@ function scheduleChartLoad(systemId: string) {
 
 function handleEvent(event: Parameters<typeof applyEvent>[0]) {
   const isSystems = event.kind === "collection" && event.collection === "systems";
+  const isStats = event.kind === "collection" && event.collection === "system_stats";
   const systemId = isSystems ? String(event.record.id ?? "") : "";
   const existed = systemId !== "" && hasSystem(systemId);
 
@@ -91,6 +96,19 @@ function handleEvent(event: Parameters<typeof applyEvent>[0]) {
       (event.action === "update" && !existed))
   ) {
     invalidateReload();
+  }
+
+  if (isStats) {
+    const stat = event.record as unknown as SystemStatPbRecord;
+    const existing = getSystem(stat.system);
+    if (
+      existing &&
+      stat.created &&
+      (!stat.type || stat.type === "1m") &&
+      chartNeedsReload(existing.chart, stat.created)
+    ) {
+      scheduleChartLoad(stat.system);
+    }
   }
 
   const updated = applyEvent(event);
@@ -111,6 +129,18 @@ function handleEvent(event: Parameters<typeof applyEvent>[0]) {
 }
 
 function startHub() {
+  if (!pingTimer) {
+    pingTimer = setInterval(() => {
+      for (const client of clients) {
+        try {
+          client.push(": ping\n\n");
+        } catch {
+          clients.delete(client);
+        }
+      }
+    }, 30_000);
+  }
+
   if (unsubscribeBeszel || hubStarting) return;
 
   hubStarting = (async () => {
@@ -123,22 +153,10 @@ function startHub() {
       hubStarting = null;
     }
   })();
-
-  pingTimer = setInterval(() => {
-    for (const client of clients) {
-      try {
-        client.push(": ping\n\n");
-      } catch {
-        clients.delete(client);
-      }
-    }
-  }, 30_000);
 }
 
 function stopHub() {
   if (clients.size > 0) return;
-  unsubscribeBeszel?.();
-  unsubscribeBeszel = null;
   if (pingTimer) clearInterval(pingTimer);
   pingTimer = null;
 }
@@ -165,6 +183,10 @@ export function subscribeDashboardStream(request: Request) {
 
       if (lastData) {
         client.push(encodeEvent(lastData));
+      }
+
+      if (isDashboardReady()) {
+        void reloadAll();
       }
 
       request.signal.addEventListener("abort", () => {

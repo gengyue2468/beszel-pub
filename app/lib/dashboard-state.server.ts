@@ -29,6 +29,14 @@ export function hasSystem(systemId: string) {
   return systems.has(systemId);
 }
 
+export function getSystem(systemId: string) {
+  return systems.get(systemId);
+}
+
+export function isDashboardReady() {
+  return ready;
+}
+
 export async function initDashboardState(): Promise<DashboardData> {
   if (ready) return dashboardFromSystems([...systems.values()]);
 

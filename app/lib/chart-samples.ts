@@ -47,6 +47,14 @@ export function chartFromStatRecords(
   return trimChart(addEmptyValues(records, CHART_1M_INTERVAL_MS));
 }
 
+export function chartNeedsReload(chart: ChartSample[], created: string) {
+  const t = new Date(created).getTime();
+  if (Number.isNaN(t)) return false;
+
+  const last = chart[chart.length - 1];
+  return last?.t != null && t - last.t > CHART_GAP_THRESHOLD_MS;
+}
+
 export function appendStatSample(
   chart: ChartSample[],
   created: string,
@@ -60,6 +68,10 @@ export function appendStatSample(
     const next = [...chart];
     next[next.length - 1] = { t, stats };
     return next;
+  }
+
+  if (last?.t != null && t - last.t > CHART_GAP_THRESHOLD_MS) {
+    return chart;
   }
 
   let next = [...chart, { t, stats }];
